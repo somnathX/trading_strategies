@@ -1,0 +1,19 @@
+[project]
+name = "trading-strategies"
+version = "0.1.0"
+description = "Nifty ORB + Fibonacci backtesting with Angel One data"
+readme = false
+requires-python = ">=3.12"
+dependencies = [
+    "logzero>=1.7.0",
+    "pandas>=2.0",
+    "plotly>=6.8.0",
+    "pyarrow>=14.0",
+    "pyotp>=2.9.0",
+    "python-dotenv>=1.0",
+    "pytz>=2024.1",
+    "smartapi-python>=1.5.5",
+    "streamlit>=1.58.0",
+    "websocket-client>=1.9.0",
+    "yfinance>=1.4.1",
+]
