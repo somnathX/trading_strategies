@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date
 
 import pandas as pd
 
 from config import OrbFibConfig
 from strategies.candles import is_strong_candle
+from strategies.levels import range_levels, targets_for_side
 
-ORB_END_BY_MINUTES = {
-    15: time(9, 30),
-    30: time(9, 45),
-}
+VALID_ORB_MINUTES = (15, 30, 45, 60)
 
 
 @dataclass
@@ -21,41 +19,30 @@ class TradeSignal:
     entry_time: pd.Timestamp
     entry_price: float
     stop_price: float
-    target_price: float
+    tp1: float | None
+    tp2: float | None
+    tp3: float | None
     orb_high: float
     orb_low: float
-    entry_style: str  # breakout | pullback
+    entry_style: str
 
 
-def _orb_end_time(orb_minutes: int) -> time:
-    if orb_minutes not in ORB_END_BY_MINUTES:
-        raise ValueError(f"orb_minutes must be one of {list(ORB_END_BY_MINUTES)}")
-    return ORB_END_BY_MINUTES[orb_minutes]
+def _session_start(day: pd.DataFrame) -> pd.Timestamp:
+    session_date = day.index[0].date()
+    tz = day.index.tz
+    return pd.Timestamp(session_date, tz=tz).replace(hour=9, minute=15)
 
 
 def _opening_range(day: pd.DataFrame, orb_minutes: int) -> tuple[float, float, pd.Timestamp]:
-    session_date = day.index[0].date()
-    tz = day.index.tz
-    session_start = pd.Timestamp(session_date, tz=tz).replace(hour=9, minute=15)
-    orb_end = session_start.replace(
-        hour=_orb_end_time(orb_minutes).hour,
-        minute=_orb_end_time(orb_minutes).minute,
-    )
-    orb = day.loc[session_start:orb_end]
+    if orb_minutes not in VALID_ORB_MINUTES:
+        raise ValueError(f"orb_minutes must be one of {VALID_ORB_MINUTES}")
+
+    session_start = _session_start(day)
+    orb_end = session_start + pd.Timedelta(minutes=orb_minutes)
+    orb = day[(day.index >= session_start) & (day.index < orb_end)]
     if orb.empty:
         raise ValueError("No candles in opening range window")
     return float(orb["high"].max()), float(orb["low"].min()), orb_end
-
-
-def _fib_levels_for_cfg(high: float, low: float, cfg: OrbFibConfig) -> dict[str, float]:
-    span = high - low
-    return {
-        "fib_382": high - 0.382 * span,
-        "fib_500": high - cfg.fib_entry_level * span,
-        "fib_618": high - 0.618 * span,
-        "target_long": high + (cfg.target_extension - 1.0) * span,
-        "target_short": low - (cfg.target_extension - 1.0) * span,
-    }
 
 
 def _strong(row: pd.Series, side: str, cfg: OrbFibConfig) -> bool:
@@ -69,7 +56,9 @@ def _make_signal(
     side: str,
     entry_price: float,
     stop_price: float,
-    target_price: float,
+    tp1: float | None,
+    tp2: float | None,
+    tp3: float | None,
     orb_high: float,
     orb_low: float,
     entry_style: str,
@@ -85,7 +74,9 @@ def _make_signal(
         entry_time=ts,
         entry_price=entry_price,
         stop_price=stop_price,
-        target_price=target_price,
+        tp1=tp1,
+        tp2=tp2,
+        tp3=tp3,
         orb_high=orb_high,
         orb_low=orb_low,
         entry_style=entry_style,
@@ -102,13 +93,16 @@ def _breakout_signals(
     signals: list[TradeSignal] = []
     for ts, row in post_orb.iterrows():
         if row["close"] > orb_high and _strong(row, "long", cfg):
+            tp1, tp2, tp3 = targets_for_side(levels, "long", cfg)
             signals.append(
                 _make_signal(
                     ts,
                     "long",
                     float(row["close"]),
                     float(levels["fib_618"]),
-                    float(levels["target_long"]),
+                    tp1,
+                    tp2,
+                    tp3,
                     orb_high,
                     orb_low,
                     "breakout",
@@ -117,13 +111,16 @@ def _breakout_signals(
             )
             break
         if row["close"] < orb_low and _strong(row, "short", cfg):
+            tp1, tp2, tp3 = targets_for_side(levels, "short", cfg)
             signals.append(
                 _make_signal(
                     ts,
                     "short",
                     float(row["close"]),
                     float(orb_high - (orb_high - orb_low) * (1 - cfg.stop_level)),
-                    float(levels["target_short"]),
+                    tp1,
+                    tp2,
+                    tp3,
                     orb_high,
                     orb_low,
                     "breakout",
@@ -157,23 +154,31 @@ def _pullback_signals(
     if breakout_side is None or breakout_time is None:
         return []
 
-    after_breakout = post_orb.loc[breakout_time:]
+    # After initial breakout, wait for 50% fib touch then re-break OR in same direction.
+    after_breakout = post_orb.loc[breakout_time:].iloc[1:]
     fib_price = levels["fib_500"]
     touched = False
+    pullback_stop: float | None = None
     signals: list[TradeSignal] = []
 
     for ts, row in after_breakout.iterrows():
         if breakout_side == "long":
-            if row["low"] <= fib_price:
-                touched = True
-            if touched and _strong(row, "long", cfg):
+            if not touched:
+                if row["low"] <= fib_price:
+                    touched = True
+                    pullback_stop = float(row["low"])
+                continue
+            if row["close"] > orb_high and _strong(row, "long", cfg) and pullback_stop is not None:
+                tp1, tp2, tp3 = targets_for_side(levels, "long", cfg)
                 signals.append(
                     _make_signal(
                         ts,
                         "long",
                         float(row["close"]),
-                        float(orb_low),
-                        float(levels["target_long"]),
+                        pullback_stop,
+                        tp1,
+                        tp2,
+                        tp3,
                         orb_high,
                         orb_low,
                         "pullback",
@@ -181,17 +186,24 @@ def _pullback_signals(
                     )
                 )
                 break
+            pullback_stop = min(pullback_stop, float(row["low"]))
         else:
-            if row["high"] >= fib_price:
-                touched = True
-            if touched and _strong(row, "short", cfg):
+            if not touched:
+                if row["high"] >= fib_price:
+                    touched = True
+                    pullback_stop = float(row["high"])
+                continue
+            if row["close"] < orb_low and _strong(row, "short", cfg) and pullback_stop is not None:
+                tp1, tp2, tp3 = targets_for_side(levels, "short", cfg)
                 signals.append(
                     _make_signal(
                         ts,
                         "short",
                         float(row["close"]),
-                        float(orb_high),
-                        float(levels["target_short"]),
+                        pullback_stop,
+                        tp1,
+                        tp2,
+                        tp3,
                         orb_high,
                         orb_low,
                         "pullback",
@@ -199,6 +211,7 @@ def _pullback_signals(
                     )
                 )
                 break
+            pullback_stop = max(pullback_stop, float(row["high"]))
 
     return signals
 
@@ -208,11 +221,11 @@ def generate_signals(day: pd.DataFrame, cfg: OrbFibConfig) -> list[TradeSignal]:
         return []
 
     orb_high, orb_low, orb_end = _opening_range(day, cfg.orb_minutes)
-    post_orb = day.loc[orb_end:]
+    post_orb = day[day.index >= orb_end]
     if post_orb.empty:
         return []
 
-    levels = _fib_levels_for_cfg(orb_high, orb_low, cfg)
+    levels = range_levels(orb_high, orb_low, cfg)
 
     if cfg.entry_mode == "breakout":
         signals = _breakout_signals(post_orb, orb_high, orb_low, levels, cfg)

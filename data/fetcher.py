@@ -5,7 +5,24 @@ from datetime import date
 
 import pandas as pd
 
-from config import Instrument, NIFTY
+from config import Instrument, MARKET_CLOSE, MARKET_OPEN, NIFTY
+
+
+def _parse_hm(value: str) -> tuple[int, int]:
+    hour, minute = value.split(":")
+    return int(hour), int(minute)
+
+
+def session_time_mask(
+    index: pd.DatetimeIndex,
+    start_hm: str = MARKET_OPEN,
+    end_hm: str = MARKET_CLOSE,
+) -> pd.Series:
+    """Session window [start, end) — e.g. 09:15 up to but not including 15:00."""
+    sh, sm = _parse_hm(start_hm)
+    eh, em = _parse_hm(end_hm)
+    mins = index.hour * 60 + index.minute
+    return (mins >= sh * 60 + sm) & (mins < eh * 60 + em)
 
 
 def get_provider(name: str | None = None):
@@ -45,6 +62,7 @@ def test_connection(provider: str | None = None) -> dict:
 def session_candles(df: pd.DataFrame, session_date: date) -> pd.DataFrame:
     tz = df.index.tz
     start = pd.Timestamp(session_date, tz=tz).replace(hour=9, minute=15)
-    end = pd.Timestamp(session_date, tz=tz).replace(hour=15, minute=30)
+    end = pd.Timestamp(session_date, tz=tz) + pd.Timedelta(days=1)
     day = df.loc[start:end]
+    day = day[session_time_mask(day.index)]
     return day[day.index.weekday < 5]

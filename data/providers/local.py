@@ -6,7 +6,8 @@ from pathlib import Path
 import pandas as pd
 import pytz
 
-from config import IST, Instrument, NIFTY
+from config import IST, Instrument, MARKET_CLOSE, MARKET_OPEN, NIFTY
+from data.fetcher import session_time_mask
 
 DATA_FILES = {
     "5": Path("data/nifty_5min/data.parquet"),
@@ -62,7 +63,8 @@ def fetch_intraday(
     tz = pytz.timezone(IST)
     start = pd.Timestamp(from_date, tz=tz)
     end = pd.Timestamp(to_date, tz=tz) + pd.Timedelta(days=1)
-    out = df.loc[start:end].between_time("09:15", "15:30")
+    out = df.loc[start:end]
+    out = out[session_time_mask(out.index)]
 
     if out.empty:
         data_start, data_end = df.index.min(), df.index.max()

@@ -7,6 +7,7 @@ import pytz
 import yfinance as yf
 
 from config import IST, Instrument, NIFTY
+from data.fetcher import session_time_mask
 
 # yfinance intraday limits (as of 2026): 1m=7d, 5m=60d, 1h=730d
 YFINANCE_INTERVALS = {
@@ -63,4 +64,5 @@ def fetch_intraday(
 
     start = pd.Timestamp(from_date, tz=tz)
     end = pd.Timestamp(to_date, tz=tz) + pd.Timedelta(days=1)
-    return df.loc[start:end].between_time("09:15", "15:30").copy()
+    out = df.loc[start:end]
+    return out[session_time_mask(out.index)].copy()

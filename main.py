@@ -11,7 +11,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Nifty ORB + Fibonacci backtest (Angel One data)")
     parser.add_argument("--from", dest="from_date", default=None, help="YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="YYYY-MM-DD")
-    parser.add_argument("--orb-minutes", type=int, default=15, choices=[15, 30])
+    parser.add_argument("--orb-minutes", type=int, default=15, choices=[15, 30, 45, 60])
     parser.add_argument(
         "--entry-mode",
         default="breakout",
