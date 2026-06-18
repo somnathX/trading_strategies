@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytz
 
-from config import IST, Instrument, MARKET_CLOSE, MARKET_OPEN, NIFTY
+from config import IST, Instrument, MARKET_CLOSE, MARKET_OPEN
 from data.fetcher import session_time_mask
 
 DATA_FILES = {
@@ -45,12 +45,17 @@ def available_range(interval: str = "5") -> tuple[pd.Timestamp, pd.Timestamp]:
 def fetch_intraday(
     from_date: date,
     to_date: date,
-    instrument: Instrument = NIFTY,
+    instrument: Instrument | None = None,
     interval: str = "5",
     use_cache: bool = True,
 ) -> pd.DataFrame:
+    from data.instruments import NIFTY
+
+    instrument = instrument or NIFTY
     if instrument.name != "NIFTY":
-        raise ValueError("Local data only has NIFTY")
+        raise ValueError(
+            f"Local parquet only has NIFTY. Use --provider dhan for {instrument.name}."
+        )
 
     path = DATA_FILES.get(interval)
     if not path:

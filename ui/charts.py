@@ -2,72 +2,120 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
+
 import pandas as pd
 import plotly.graph_objects as go
 
-from config import OrbFibConfig
-from strategies.levels import range_levels
-from strategies.orb_fib import _opening_range, generate_signals
+from config import NIFTY_LOT_SIZE, OrbFibConfig
+from strategies.levels import impulse_leg_levels, range_levels
+from strategies.orb_fib import try_opening_range
+from strategies.vwap import session_vwap
+from ui.trades_display import format_hold_label, format_outcome
 
 BUY_COLOR = "#059669"
 SELL_COLOR = "#dc2626"
 EXIT_COLOR = "#f59e0b"
-
-FIB_STYLES = [
-    ("fib_382", "38.2%", "#c4b5fd", "dot"),
-    ("fib_500", "50.0%", "#a855f7", "dash"),
-    ("fib_618", "61.8%", "#7c3aed", "dashdot"),
-]
-
-TP_STYLES = [
-    ("tp1_long", "tp1_short", "TP1 127.2%", "#0ea5e9"),
-    ("tp2_long", "tp2_short", "TP2 161.8%", "#06b6d4"),
-    ("tp3_long", "tp3_short", "TP3 200%", "#0284c7"),
-]
+SL_COLOR = "#ef4444"
+OR_COLOR = "#64748b"
+VWAP_COLOR = "#f97316"
+FIB_COLOR = "#a855f7"
+TP_COLOR = "#0ea5e9"
 
 
-def _label_offset(orb_high: float, orb_low: float) -> float:
-    return max((orb_high - orb_low) * 0.05, 25.0)
+@dataclass
+class ChartLayers:
+    opening_range: bool = True
+    trade_levels: bool = True
+    fib_retracements: bool = False
+    tp_extensions: bool = False
+    vwap: bool = False
 
 
 def _as_ts(value) -> pd.Timestamp:
     return pd.to_datetime(value)
 
 
-def _add_horizontal_level(
+def _label_offset(orb_high: float, orb_low: float) -> float:
+    return max((orb_high - orb_low) * 0.08, 20.0)
+
+
+def _add_hline(
     fig: go.Figure,
     x0: pd.Timestamp,
     x1: pd.Timestamp,
     y: float,
-    label: str,
+    name: str,
     color: str,
-    dash: str = "dot",
+    dash: str = "solid",
     width: float = 1.5,
+    legendgroup: str | None = None,
+    showlegend: bool = True,
 ) -> None:
     fig.add_trace(
         go.Scatter(
             x=[x0, x1],
             y=[y, y],
             mode="lines",
+            name=name,
+            legendgroup=legendgroup,
+            showlegend=showlegend,
             line=dict(color=color, dash=dash, width=width),
-            name=label,
-            hovertemplate=f"{label}: %{{y:,.2f}}<extra></extra>",
+            hovertemplate=f"{name}: %{{y:,.2f}}<extra></extra>",
         )
     )
-    fig.add_annotation(
-        x=x1,
-        y=y,
-        xref="x",
-        yref="y",
-        text=f"{label}",
-        showarrow=False,
-        xanchor="left",
-        xshift=8,
-        font=dict(size=10, color=color),
-        bgcolor="rgba(255,255,255,0.85)",
-        bordercolor=color,
-        borderwidth=1,
-    )
+
+
+def _trade_level_prices(trade: pd.Series) -> list[tuple[str, float, str]]:
+    rows: list[tuple[str, float, str]] = []
+    stop = trade.get("stop_price")
+    if pd.notna(stop):
+        rows.append(("Stop", float(stop), SL_COLOR))
+    for key, label in [("tp1_price", "TP1"), ("tp2_price", "TP2"), ("tp3_price", "TP3")]:
+        val = trade.get(key)
+        if val is not None and pd.notna(val):
+            rows.append((label, float(val), TP_COLOR))
+    return rows
+
+
+def format_trade_summary(trades: pd.DataFrame, nifty_lot: int = NIFTY_LOT_SIZE) -> pd.DataFrame:
+    """Human-readable trade table for the UI."""
+    if trades.empty:
+        return trades
+
+    rows = []
+    for i, t in trades.iterrows():
+        entry_t = _as_ts(t["entry_time"])
+        exit_t = _as_ts(t["exit_time"])
+        pnl_inr = t.get("pnl_rupees")
+        if pd.isna(pnl_inr) and "lots" in t:
+            pnl_inr = float(t["pnl_points"]) * int(t["lots"]) * nifty_lot
+        rows.append(
+            {
+                "Trade": i + 1 if isinstance(i, int) else len(rows) + 1,
+                "Direction": str(t["side"]).upper(),
+                "Setup": t.get("entry_style", ""),
+                "Entry date": entry_t.strftime("%Y-%m-%d"),
+                "Exit date": exit_t.strftime("%Y-%m-%d"),
+                "Entry": entry_t.strftime("%H:%M"),
+                "Exit": exit_t.strftime("%H:%M"),
+                "Entry ₹": round(float(t["entry_price"]), 1),
+                "Stop ₹": round(float(t["stop_price"]), 1) if pd.notna(t.get("stop_price")) else None,
+                "Exit ₹": round(float(t["exit_price"]), 1),
+                "PnL pts": round(float(t["pnl_points"]), 2),
+                "PnL ₹": round(float(pnl_inr), 0) if pd.notna(pnl_inr) else None,
+                "Sessions held": t.get(
+                    "hold_label",
+                    format_hold_label(
+                        int(t.get("hold_days", 1)),
+                        int(t.get("max_hold_sessions", 1)),
+                    ),
+                ),
+                "Exit reason": t.get("exit_reason", format_outcome(str(t.get("outcome", "")))),
+                "Lots": int(t.get("lots", 1)) if pd.notna(t.get("lots")) else None,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def make_session_chart(
@@ -77,16 +125,30 @@ def make_session_chart(
     interval: str,
     orb_minutes: int,
     cfg: OrbFibConfig | None = None,
+    full_df: pd.DataFrame | None = None,
+    layers: ChartLayers | None = None,
+    price_label: str = "NIFTY",
 ) -> go.Figure:
     if day.empty:
         fig = go.Figure()
         fig.update_layout(title="No data")
         return fig
 
+    layers = layers or ChartLayers()
     cfg = cfg or OrbFibConfig(orb_minutes=orb_minutes, interval=interval)
-    orb_high, orb_low, orb_end = _opening_range(day, orb_minutes)
+    cfg = replace(cfg, orb_minutes=orb_minutes, interval=interval)
+    or_levels = try_opening_range(day, cfg.orb_minutes)
+    if or_levels is None:
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"{session_date} · no opening-range candles (partial session or holiday)",
+        )
+        return fig
+
+    orb_high, orb_low, orb_end = or_levels
     levels = range_levels(orb_high, orb_low, cfg)
     y_pad = _label_offset(orb_high, orb_low)
+    x0, x1 = day.index[0], day.index[-1]
 
     fig = go.Figure()
     fig.add_trace(
@@ -96,206 +158,221 @@ def make_session_chart(
             high=day["high"],
             low=day["low"],
             close=day["close"],
-            name="NIFTY",
+            name="Price",
             increasing_line_color="#22c55e",
             increasing_fillcolor="#22c55e",
             decreasing_line_color="#ef4444",
             decreasing_fillcolor="#ef4444",
-            opacity=0.88,
         )
     )
 
-    x0, x1 = day.index[0], day.index[-1]
+    y_values = [float(day["high"].max()), float(day["low"].min())]
 
-    fig.add_trace(
-        go.Scatter(
-            x=[x0, x1],
-            y=[orb_high, orb_high],
-            mode="lines",
-            line=dict(color="#475569", width=2),
-            name="OR high",
-            hovertemplate="OR high: %{y:,.2f}<extra></extra>",
+    if layers.opening_range:
+        y_values.extend([orb_high, orb_low])
+        fig.add_hrect(
+            y0=orb_low,
+            y1=orb_high,
+            fillcolor="rgba(100,116,139,0.12)",
+            line_width=0,
+            annotation_text="OR",
+            annotation_position="top left",
         )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=[x0, x1],
-            y=[orb_low, orb_low],
-            mode="lines",
-            line=dict(color="#475569", width=2, dash="solid"),
-            name="OR low",
-            hovertemplate="OR low: %{y:,.2f}<extra></extra>",
+        _add_hline(
+            fig, x0, x1, orb_high, "OR high", OR_COLOR, dash="dot", width=1.2,
+            legendgroup="or", showlegend=True,
         )
-    )
-    fig.add_hrect(y0=orb_low, y1=orb_high, fillcolor="rgba(100,116,139,0.08)", line_width=0)
+        _add_hline(
+            fig, x0, x1, orb_low, "OR low", OR_COLOR, dash="dot", width=1.2,
+            legendgroup="or", showlegend=False,
+        )
 
-    for key, label, color, dash in FIB_STYLES:
-        _add_horizontal_level(fig, x0, x1, levels[key], label, color, dash)
+    if layers.vwap:
+        vwap_line = session_vwap(day)
+        y_values.extend(vwap_line.tolist())
+        fig.add_trace(
+            go.Scatter(
+                x=vwap_line.index,
+                y=vwap_line,
+                mode="lines",
+                name="VWAP",
+                line=dict(color=VWAP_COLOR, width=1.5, dash="dot"),
+                hovertemplate="VWAP: %{y:,.2f}<extra></extra>",
+            )
+        )
 
-    signals = generate_signals(day, cfg)
-    trade_side = signals[0].side if signals else None
+    if layers.fib_retracements:
+        impulse_trade = None
+        if trades is not None and not trades.empty:
+            t0 = trades.iloc[0]
+            if (
+                str(t0.get("entry_style", "")) == "fib_pullback"
+                and pd.notna(t0.get("impulse_low"))
+                and pd.notna(t0.get("impulse_high"))
+            ):
+                impulse_trade = t0
+
+        if impulse_trade is not None:
+            leg = impulse_leg_levels(
+                float(impulse_trade["impulse_low"]),
+                float(impulse_trade["impulse_high"]),
+                cfg,
+            )
+            fib_labels = [
+                ("Impulse low", "impulse_low", FIB_COLOR),
+                ("Fib 38.2%", "fib_382", FIB_COLOR),
+                ("Fib 50%", "fib_500", FIB_COLOR),
+                ("Fib 61.8%", "fib_618", FIB_COLOR),
+                ("Fib 78.6%", "fib_786", SL_COLOR),
+                ("Impulse high (TP)", "impulse_high", TP_COLOR),
+            ]
+            for label, key, color in fib_labels:
+                y_values.append(leg[key])
+                dash = "solid" if key in ("impulse_low", "impulse_high") else "dash"
+                _add_hline(fig, x0, x1, leg[key], label, color, dash=dash, width=1.2)
+        else:
+            for label, key in [
+                ("Fib 38.2%", "fib_382"),
+                ("Fib 50%", "fib_500"),
+                ("Fib 61.8%", "fib_618"),
+            ]:
+                y_values.append(levels[key])
+                _add_hline(fig, x0, x1, levels[key], label, FIB_COLOR, dash="dash", width=1)
+
+    trade_side = None
     if trades is not None and not trades.empty:
         trade_side = trades.iloc[0]["side"]
 
-    for long_key, short_key, label, color in TP_STYLES:
-        if trade_side == "long" and long_key in levels:
-            _add_horizontal_level(fig, x0, x1, levels[long_key], label, color, "longdash", 1.5)
-        elif trade_side == "short" and short_key in levels:
-            _add_horizontal_level(fig, x0, x1, levels[short_key], label, color, "longdash", 1.5)
-        elif trade_side is None:
-            _add_horizontal_level(fig, x0, x1, levels[long_key], f"{label} L", color, "longdash", 1.0)
-            _add_horizontal_level(fig, x0, x1, levels[short_key], f"{label} S", color, "dot", 1.0)
+    if layers.tp_extensions and trade_side:
+        tp_keys = (
+            [("TP1", "tp1_long"), ("TP2", "tp2_long"), ("TP3", "tp3_long")]
+            if trade_side == "long"
+            else [("TP1", "tp1_short"), ("TP2", "tp2_short"), ("TP3", "tp3_short")]
+        )
+        for label, key in tp_keys:
+            if key in levels:
+                y_values.append(levels[key])
+                _add_hline(fig, x0, x1, levels[key], label, TP_COLOR, dash="longdash", width=1.2)
 
-    buy_x, buy_y, buy_labels = [], [], []
-    sell_x, sell_y, sell_labels = [], [], []
-
-    for sig in signals:
-        ts = sig.entry_time
-        price = sig.entry_price
-        tag = f"{sig.entry_style}"
-        if sig.side == "long":
-            buy_x.append(ts)
-            buy_y.append(price)
-            buy_labels.append(f"BUY · {tag}")
-        else:
-            sell_x.append(ts)
-            sell_y.append(price)
-            sell_labels.append(f"SELL · {tag}")
-
-    # Merge with executed trades for exit markers
-    exit_x, exit_y, exit_labels = [], [], []
     if trades is not None and not trades.empty:
-        for _, t in trades.iterrows():
+        for idx, t in trades.iterrows():
+            entry_t = _as_ts(t["entry_time"])
             exit_t = _as_ts(t["exit_time"])
+            entry_price = float(t["entry_price"])
             exit_price = float(t["exit_price"])
-            outcome = str(t.get("outcome", "eod"))
-            exit_x.append(exit_t)
-            exit_y.append(exit_price)
-            exit_labels.append(f"{outcome} ({exit_price:,.1f})")
+            side = str(t["side"])
+            style = str(t.get("entry_style", ""))
+            outcome = str(t.get("outcome", ""))
+            pnl = float(t["pnl_points"])
+            trade_num = idx + 1 if isinstance(idx, int) else 1
 
-    if buy_x:
-        fig.add_trace(
-            go.Scatter(
-                x=buy_x,
-                y=buy_y,
-                mode="markers",
-                name="BUY signal",
-                marker=dict(
-                    symbol="triangle-up",
-                    size=26,
-                    color=BUY_COLOR,
-                    line=dict(width=3, color="white"),
-                ),
-                cliponaxis=False,
-            )
-        )
-        for x, y, lbl in zip(buy_x, buy_y, buy_labels):
-            fig.add_annotation(
-                x=x,
-                y=y - y_pad,
-                text="BUY",
-                showarrow=True,
-                arrowhead=3,
-                arrowsize=1.4,
-                arrowwidth=3,
-                arrowcolor=BUY_COLOR,
-                ax=0,
-                ay=40,
-                bgcolor=BUY_COLOR,
-                bordercolor="#ffffff",
-                borderwidth=2,
-                font=dict(color="white", size=15, family="Arial Black"),
-            )
+            y_values.extend([entry_price, exit_price])
 
-    if sell_x:
-        fig.add_trace(
-            go.Scatter(
-                x=sell_x,
-                y=sell_y,
-                mode="markers",
-                name="SELL signal",
-                marker=dict(
-                    symbol="triangle-down",
-                    size=26,
-                    color=SELL_COLOR,
-                    line=dict(width=3, color="white"),
-                ),
-                cliponaxis=False,
-            )
-        )
-        for x, y, lbl in zip(sell_x, sell_y, sell_labels):
-            fig.add_annotation(
-                x=x,
-                y=y + y_pad,
-                text="SELL",
-                showarrow=True,
-                arrowhead=3,
-                arrowsize=1.4,
-                arrowwidth=3,
-                arrowcolor=SELL_COLOR,
-                ax=0,
-                ay=-40,
-                bgcolor=SELL_COLOR,
-                bordercolor="#ffffff",
-                borderwidth=2,
-                font=dict(color="white", size=15, family="Arial Black"),
+            if layers.trade_levels:
+                for label, price, color in _trade_level_prices(t):
+                    y_values.append(price)
+                    x_end = exit_t if exit_t <= x1 else x1
+                    x_start = entry_t if entry_t >= x0 else x0
+                    dash = "dash" if label == "Stop" else "longdash"
+                    _add_hline(
+                        fig,
+                        x_start,
+                        x_end,
+                        price,
+                        f"T{trade_num} {label}",
+                        color,
+                        dash=dash,
+                        width=2 if label == "Stop" else 1.5,
+                    )
+
+            marker_color = BUY_COLOR if side == "long" else SELL_COLOR
+            entry_label = "BUY" if side == "long" else "SELL"
+            fig.add_trace(
+                go.Scatter(
+                    x=[entry_t],
+                    y=[entry_price],
+                    mode="markers",
+                    name=f"T{trade_num} entry",
+                    legendgroup=f"trade{trade_num}",
+                    marker=dict(
+                        symbol="triangle-up" if side == "long" else "triangle-down",
+                        size=14,
+                        color=marker_color,
+                        line=dict(width=1.5, color="white"),
+                    ),
+                    customdata=[f"{entry_label} {style} @ {entry_price:,.1f}"],
+                    hovertemplate="%{customdata}<extra></extra>",
+                )
             )
 
-    if exit_x:
-        fig.add_trace(
-            go.Scatter(
-                x=exit_x,
-                y=exit_y,
-                mode="markers+text",
-                name="Exit",
-                text=exit_labels,
-                textposition="middle right",
-                textfont=dict(size=11, color=EXIT_COLOR, family="Arial Black"),
-                marker=dict(
-                    symbol="diamond",
-                    size=16,
-                    color=EXIT_COLOR,
-                    line=dict(width=2, color="white"),
-                ),
-            )
-        )
+            if exit_t >= x0 and exit_t <= x1:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[exit_t],
+                        y=[exit_price],
+                        mode="markers",
+                        name=f"T{trade_num} exit",
+                        legendgroup=f"trade{trade_num}",
+                        showlegend=False,
+                        marker=dict(
+                            symbol="diamond",
+                            size=11,
+                            color=EXIT_COLOR,
+                            line=dict(width=1.5, color="white"),
+                        ),
+                        customdata=[f"Exit {outcome} @ {exit_price:,.1f} ({pnl:+.1f} pts)"],
+                        hovertemplate="%{customdata}<extra></extra>",
+                    )
+                )
+            elif exit_t > x1:
+                fig.add_annotation(
+                    x=x1,
+                    y=exit_price,
+                    text=f"T{trade_num} exit → {exit_t.strftime('%m-%d %H:%M')}",
+                    showarrow=False,
+                    xanchor="right",
+                    font=dict(size=10, color=EXIT_COLOR),
+                    bgcolor="rgba(255,255,255,0.9)",
+                )
 
-    title = f"NIFTY {interval}m · {session_date}"
-    n_sig = len(signals)
-    if n_sig:
-        title += f" · {n_sig} signal(s)"
+    title = f"{session_date} · {interval}m"
     if trades is not None and not trades.empty:
-        title += f" · {trades['pnl_points'].sum():.1f} pts"
+        total_pts = trades["pnl_points"].sum()
+        title += f" · {len(trades)} trade(s) · {total_pts:+.1f} pts"
+        t0 = trades.iloc[0]
+        entry_d = _as_ts(t0["entry_time"]).date()
+        exit_d = _as_ts(t0["exit_time"]).date()
+        if exit_d != entry_d:
+            held = t0.get("hold_label") or format_hold_label(
+                int(t0.get("hold_days", 1)),
+                int(t0.get("max_hold_sessions", 1)),
+            )
+            reason = t0.get("exit_reason", format_outcome(str(t0.get("outcome", ""))))
+            title += f" · exit {exit_d} ({held}, {reason})"
+
+    y_min = min(y_values) - y_pad
+    y_max = max(y_values) + y_pad
 
     fig.update_layout(
-        title=title,
+        title=dict(text=title, font=dict(size=14)),
+        template="plotly_white",
         xaxis_rangeslider_visible=False,
-        height=520,
-        margin=dict(l=55, r=110, t=70, b=45),
+        height=480,
+        margin=dict(l=48, r=24, t=56, b=36),
+        yaxis=dict(range=[y_min, y_max], title=price_label),
+        xaxis=dict(title="Time (IST)"),
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.03,
-            xanchor="left",
-            x=0,
-            font=dict(size=10),
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=dict(size=9),
+            bgcolor="rgba(255,255,255,0.8)",
         ),
         hovermode="x unified",
     )
-    fig.add_vline(
-        x=orb_end,
-        line_dash="dot",
-        line_color="#94a3b8",
-        annotation_text="OR end",
-        annotation_position="top",
-    )
-
-    fig.update_traces(selector=dict(type="candlestick"), opacity=0.82)
-    fig.update_traces(
-        selector=dict(type="scatter"),
-        marker_line_width=2,
-        marker_line_color="white",
-    )
+    fig.add_vline(x=orb_end, line_width=1, line_dash="dot", line_color="#cbd5e1")
 
     return fig
 

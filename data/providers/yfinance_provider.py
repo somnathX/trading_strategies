@@ -6,7 +6,7 @@ import pandas as pd
 import pytz
 import yfinance as yf
 
-from config import IST, Instrument, NIFTY
+from config import IST, Instrument
 from data.fetcher import session_time_mask
 
 # yfinance intraday limits (as of 2026): 1m=7d, 5m=60d, 1h=730d
@@ -18,20 +18,31 @@ YFINANCE_INTERVALS = {
     "60": ("1h", 730),
 }
 
+YFINANCE_INDEX = {
+    "NIFTY": "^NSEI",
+    "BANKNIFTY": "^NSEBANK",
+    "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
+}
+
 
 def _yf_symbol(instrument: Instrument) -> str:
-    if instrument.name == "NIFTY":
-        return "^NSEI"
-    raise ValueError(f"No yfinance mapping for {instrument.name}")
+    if instrument.kind == "index":
+        mapped = YFINANCE_INDEX.get(instrument.name)
+        if mapped:
+            return mapped
+    return f"{instrument.name}.NS"
 
 
 def fetch_intraday(
     from_date: date,
     to_date: date,
-    instrument: Instrument = NIFTY,
+    instrument: Instrument | None = None,
     interval: str = "1",
     use_cache: bool = True,
 ) -> pd.DataFrame:
+    from data.instruments import NIFTY
+
+    instrument = instrument or NIFTY
     yf_interval, max_days = YFINANCE_INTERVALS.get(interval, ("5m", 60))
     earliest = date.today() - timedelta(days=max_days - 1)
     if from_date < earliest:

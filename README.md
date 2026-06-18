@@ -8,13 +8,12 @@ Nifty ORB + Fibonacci backtesting for the Indian market. Uses bundled historical
 
 | Mode | Entry |
 |------|--------|
-| **Breakout** | Close beyond OR high/low on a **strong** bullish/bearish candle |
-| **Pullback** | After breakout, retrace to 50% fib, then enter on next strong candle |
-| **Both** | Run breakout and pullback independently (max 2 trades/day) |
+| **Breakout** | Close beyond OR high/low on a **strong** candle |
+| **Fib pullback** | OR break sets direction; enter on 50%/61.8% retrace of impulse leg |
 
-**Strong candle** (default): body ≥ 55% of range, each wick ≤ 35% (filters long-wick / weak bodies).
+**Strong candle** (default): body ≥ 55% of range, each wick ≤ 35%.
 
-**Risk** — stop at 61.8% fib (breakout long) or OR opposite side (pullback); target at 127.2% extension of the range.
+**Risk** — breakout stop at fib retracement of OR; fib pullback stop at 78.6% or swing extreme. Targets at fib extensions / impulse high/low.
 
 ## Data
 
@@ -47,11 +46,8 @@ Optional broker credentials in `.env` (copy from `.env.example`) — only needed
 # Default: local 5m data
 uv run python main.py --from 2025-05-01 --to 2025-05-31
 
-# Pullback only
+# Fib pullback (wait for retrace after OR break)
 uv run python main.py --entry-mode fib_pullback --from 2025-05-01 --to 2025-05-31
-
-# Both strategies
-uv run python main.py --entry-mode both --from 2025-05-01 --to 2025-05-31
 
 # 30-min opening range
 uv run python main.py --orb-minutes 30

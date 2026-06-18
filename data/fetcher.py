@@ -5,7 +5,7 @@ from datetime import date
 
 import pandas as pd
 
-from config import Instrument, MARKET_CLOSE, MARKET_OPEN, NIFTY
+from config import Instrument, MARKET_CLOSE, MARKET_OPEN
 
 
 def _parse_hm(value: str) -> tuple[int, int]:
@@ -36,26 +36,35 @@ def get_provider(name: str | None = None):
     if provider == "yfinance":
         from data.providers import yfinance_provider as mod
         return mod
-    raise ValueError(f"Unknown DATA_PROVIDER '{provider}'. Use: angel, yfinance")
+    if provider == "dhan":
+        from data.providers import dhan as mod
+        return mod
+    raise ValueError(f"Unknown DATA_PROVIDER '{provider}'. Use: local, angel, dhan, yfinance")
 
 
 def fetch_intraday(
     from_date: date,
     to_date: date,
-    instrument: Instrument = NIFTY,
+    instrument: Instrument | None = None,
     interval: str = "1",
     use_cache: bool = True,
     provider: str | None = None,
 ) -> pd.DataFrame:
+    from data.instruments import NIFTY
+
+    instrument = instrument or NIFTY
     return get_provider(provider).fetch_intraday(
         from_date, to_date, instrument, interval, use_cache
     )
 
 
-def test_connection(provider: str | None = None) -> dict:
+def test_connection(provider: str | None = None, instrument: Instrument | None = None) -> dict:
+    from data.instruments import NIFTY
+
+    instrument = instrument or NIFTY
     mod = get_provider(provider)
     if hasattr(mod, "test_connection"):
-        return mod.test_connection()
+        return mod.test_connection(instrument)
     return {"status": True, "message": f"{provider or os.getenv('DATA_PROVIDER', 'angel')} has no test hook"}
 
 
@@ -66,3 +75,42 @@ def session_candles(df: pd.DataFrame, session_date: date) -> pd.DataFrame:
     day = df.loc[start:end]
     day = day[session_time_mask(day.index)]
     return day[day.index.weekday < 5]
+
+
+def post_entry_candles(
+    df: pd.DataFrame,
+    entry_time: pd.Timestamp,
+    max_hold_days: int,
+) -> pd.DataFrame:
+    """Candles from entry through up to max_hold_days trading sessions (for swing simulation)."""
+    entry_ts = pd.Timestamp(entry_time)
+    if df.empty:
+        return df
+
+    if entry_ts not in df.index:
+        future = df.index[df.index >= entry_ts]
+        if future.empty:
+            return pd.DataFrame()
+        entry_ts = future[0]
+
+    all_dates = sorted({d for d in df.index.date})
+    entry_date = entry_ts.date()
+    if entry_date not in all_dates:
+        return pd.DataFrame()
+
+    start_idx = all_dates.index(entry_date)
+    hold_dates = all_dates[start_idx : start_idx + max(max_hold_days, 1)]
+
+    parts: list[pd.DataFrame] = []
+    for sd in hold_dates:
+        day = session_candles(df, sd)
+        if day.empty:
+            continue
+        if sd == entry_date:
+            day = day[day.index >= entry_ts]
+        if not day.empty:
+            parts.append(day)
+
+    if not parts:
+        return pd.DataFrame()
+    return pd.concat(parts).sort_index()

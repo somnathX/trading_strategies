@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 venv/
 data/cache/
+data/ui_prefs.json
 
 # Ignore parquet by default; track bundled market data
 *.parquet

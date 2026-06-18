@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytz
 
-from config import CACHE_DIR, IST, Instrument, NIFTY
+from config import CACHE_DIR, IST, Instrument
 
 CHUNK_DAYS = 5
 INTERVAL_MAP = {
@@ -42,11 +42,13 @@ def _candles_to_df(candles: list) -> pd.DataFrame:
     )
 
 
-def test_connection(instrument: Instrument = NIFTY) -> dict:
+def test_connection(instrument: Instrument | None = None) -> dict:
     from datetime import date, timedelta
 
     from data.angel_client import get_angel_client
+    from data.instruments import NIFTY
 
+    instrument = instrument or NIFTY
     client = get_angel_client()
     test_day = date.today() - timedelta(days=3)
     while test_day.weekday() >= 5:
@@ -65,6 +67,7 @@ def test_connection(instrument: Instrument = NIFTY) -> dict:
         "status": response.get("status"),
         "message": response.get("message"),
         "errorcode": response.get("errorcode"),
+        "symbol": instrument.name,
         "test_day": str(test_day),
         "candles": len(candles),
         "sample": candles[:2] if candles else None,
@@ -75,7 +78,7 @@ def test_connection(instrument: Instrument = NIFTY) -> dict:
 def fetch_intraday(
     from_date,
     to_date,
-    instrument: Instrument = NIFTY,
+    instrument: Instrument | None = None,
     interval: str = "1",
     use_cache: bool = True,
 ) -> pd.DataFrame:
@@ -83,7 +86,9 @@ def fetch_intraday(
     from datetime import date, timedelta
 
     from data.angel_client import get_angel_client
+    from data.instruments import NIFTY
 
+    instrument = instrument or NIFTY
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_file = _cache_path(instrument, interval)
 
