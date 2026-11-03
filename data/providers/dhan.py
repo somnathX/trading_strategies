@@ -103,9 +103,16 @@ def fetch_intraday(
     instrument: Instrument | None = None,
     interval: str = "5",
     use_cache: bool = True,
+    *,
+    market_open: str | None = None,
+    market_close: str | None = None,
 ) -> pd.DataFrame:
+    from config import MARKET_CLOSE as DEFAULT_CLOSE
+    from config import MARKET_OPEN as DEFAULT_OPEN
     from data.instruments import NIFTY
 
+    session_open = market_open or DEFAULT_OPEN
+    session_close = market_close or DEFAULT_CLOSE
     instrument = instrument or NIFTY
     client = get_dhan_client()
     security_id, exchange_segment, instrument_type = _dhan_params(instrument)
@@ -121,7 +128,7 @@ def fetch_intraday(
         need_to = pd.Timestamp(to_date, tz=pytz.timezone(IST)) + pd.Timedelta(days=1)
         if cached.index.min() <= need_from and cached.index.max() >= need_to - pd.Timedelta(days=1):
             out = cached.loc[need_from:need_to].copy()
-            return out[session_time_mask(out.index)]
+            return out[session_time_mask(out.index, start_hm=session_open, end_hm=session_close)]
 
     frames: list[pd.DataFrame] = []
     empty_chunks = 0
@@ -155,7 +162,7 @@ def fetch_intraday(
 
     df = pd.concat(frames).sort_index()
     df = df[~df.index.duplicated(keep="last")]
-    df = df[session_time_mask(df.index)]
+    df = df[session_time_mask(df.index, start_hm=session_open, end_hm=session_close)]
 
     if use_cache:
         if cache_file.exists():

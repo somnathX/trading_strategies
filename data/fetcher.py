@@ -49,13 +49,27 @@ def fetch_intraday(
     interval: str = "1",
     use_cache: bool = True,
     provider: str | None = None,
+    *,
+    market_open: str | None = None,
+    market_close: str | None = None,
 ) -> pd.DataFrame:
     from data.instruments import NIFTY
 
     instrument = instrument or NIFTY
-    return get_provider(provider).fetch_intraday(
-        from_date, to_date, instrument, interval, use_cache
-    )
+    mod = get_provider(provider)
+    kwargs: dict = {}
+    if market_open is not None:
+        kwargs["market_open"] = market_open
+    if market_close is not None:
+        kwargs["market_close"] = market_close
+    if kwargs and hasattr(mod, "fetch_intraday"):
+        import inspect
+
+        if "market_close" in inspect.signature(mod.fetch_intraday).parameters:
+            return mod.fetch_intraday(
+                from_date, to_date, instrument, interval, use_cache, **kwargs
+            )
+    return mod.fetch_intraday(from_date, to_date, instrument, interval, use_cache)
 
 
 def test_connection(provider: str | None = None, instrument: Instrument | None = None) -> dict:
@@ -68,12 +82,18 @@ def test_connection(provider: str | None = None, instrument: Instrument | None =
     return {"status": True, "message": f"{provider or os.getenv('DATA_PROVIDER', 'angel')} has no test hook"}
 
 
-def session_candles(df: pd.DataFrame, session_date: date) -> pd.DataFrame:
+def session_candles(
+    df: pd.DataFrame,
+    session_date: date,
+    *,
+    market_open: str = MARKET_OPEN,
+    market_close: str = MARKET_CLOSE,
+) -> pd.DataFrame:
     tz = df.index.tz
     start = pd.Timestamp(session_date, tz=tz).replace(hour=9, minute=15)
     end = pd.Timestamp(session_date, tz=tz) + pd.Timedelta(days=1)
     day = df.loc[start:end]
-    day = day[session_time_mask(day.index)]
+    day = day[session_time_mask(day.index, start_hm=market_open, end_hm=market_close)]
     return day[day.index.weekday < 5]
 
 
