@@ -217,6 +217,7 @@ def make_session_chart(
                 float(impulse_trade["impulse_low"]),
                 float(impulse_trade["impulse_high"]),
                 cfg,
+                str(impulse_trade["side"]),
             )
             fib_labels = [
                 ("Impulse low", "impulse_low", FIB_COLOR),

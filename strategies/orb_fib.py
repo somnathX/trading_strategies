@@ -10,14 +10,12 @@ from strategies.candles import is_strong_candle
 from strategies.levels import (
     breakout_stop_price,
     breakout_targets,
-    impulse_leg_levels,
     impulse_targets,
     range_levels,
 )
 from strategies.vwap import session_vwap, vwap_side_ok
 
 VALID_ORB_MINUTES = (15, 30, 45, 60)
-FIB_ENTRY_KEYS = {0.382: "fib_382", 0.5: "fib_500", 0.618: "fib_618"}
 
 
 @dataclass
@@ -220,10 +218,9 @@ def _fib_pullback_signals(
             if span < min_span:
                 continue
 
-            leg = impulse_leg_levels(impulse_low, impulse_high, cfg)
-            fib_key = FIB_ENTRY_KEYS.get(cfg.fib_entry_level, "fib_500")
-            fib_entry = leg[fib_key]
-            fib_stop = leg["fib_786"]
+            # Retracements of an up leg are measured down from the impulse high.
+            fib_entry = impulse_high - cfg.fib_entry_level * span
+            fib_stop = impulse_high - cfg.fib_pullback_stop_level * span
 
             if lo <= fib_entry:
                 if swing_low is None:
@@ -269,9 +266,8 @@ def _fib_pullback_signals(
             if span < min_span:
                 continue
 
-            leg = impulse_leg_levels(impulse_low, impulse_high, cfg)
-            fib_key = FIB_ENTRY_KEYS.get(cfg.fib_entry_level, "fib_618")
-            fib_entry = leg[fib_key]
+            # Retracements of a down leg are measured up from the impulse low.
+            fib_entry = impulse_low + cfg.fib_entry_level * span
             fib_stop = impulse_low + cfg.fib_pullback_stop_level * span
 
             if hi >= fib_entry:

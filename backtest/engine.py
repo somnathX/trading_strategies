@@ -39,19 +39,6 @@ class TradeResult:
     impulse_high: float | None = None
 
 
-def _ratchet_stop(
-    signal: TradeSignal,
-    levels: dict[str, float],
-    cfg: OrbFibConfig,
-    ratchet_idx: int,
-) -> float:
-    fib_pct = cfg.tsl_ratchet_fibs[min(ratchet_idx, len(cfg.tsl_ratchet_fibs) - 1)]
-    span = signal.orb_high - signal.orb_low
-    if signal.side == "long":
-        return signal.orb_high - fib_pct * span
-    return signal.orb_low + fib_pct * span
-
-
 def _long_stop_fill(row: pd.Series, stop: float) -> tuple[float, str] | None:
     o, lo = float(row["open"]), float(row["low"])
     if lo <= stop:
@@ -172,16 +159,10 @@ def _simulate_trade(
             day_or_cache[bar_date] = _session_or_levels(df, bar_date, cfg.orb_minutes)
         return day_or_cache[bar_date]
 
-    for ts, row in path.iterrows():
+    # Entry fills at the signal candle's close, so its open/high/low happened before
+    # the position existed: exits are only checked from the next candle on.
+    for ts, row in path.iloc[1:].iterrows():
         hi, lo = float(row["high"]), float(row["low"])
-
-        if signal.side == "long":
-            running_extreme = max(running_extreme, hi)
-        else:
-            running_extreme = min(running_extreme, lo)
-
-        if cfg.stop_mode == "trail":
-            stop = ratchet_trail_stop(signal.side, stop, running_extreme, trail_dist)
 
         if remaining > 0 and swing and cfg.swing_opposite_or != "off":
             day_or = _day_or(ts.date())
@@ -272,6 +253,15 @@ def _simulate_trade(
                 exit_time = ts
                 exit_price = tp_exit_price
                 break
+
+        # Trail from this candle's extreme for the next candle: within one OHLC bar we
+        # can't know whether the high came before the low.
+        if signal.side == "long":
+            running_extreme = max(running_extreme, hi)
+        else:
+            running_extreme = min(running_extreme, lo)
+        if cfg.stop_mode == "trail":
+            stop = ratchet_trail_stop(signal.side, stop, running_extreme, trail_dist)
 
     if remaining > 0:
         close = float(path.iloc[-1]["close"])

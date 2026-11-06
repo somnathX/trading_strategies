@@ -178,6 +178,7 @@ def build_session_chart_html(
                 float(impulse_trade["impulse_low"]),
                 float(impulse_trade["impulse_high"]),
                 cfg,
+                str(impulse_trade["side"]),
             )
             for label, key in [
                 ("Impulse low", "impulse_low"),

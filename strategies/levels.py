@@ -43,16 +43,24 @@ def impulse_leg_levels(
     impulse_low: float,
     impulse_high: float,
     cfg: OrbFibConfig,
+    side: str = "long",
 ) -> dict[str, float]:
-    """Fib retracements on the post-breakout impulse leg (low → high)."""
+    """Fib retracements on the post-breakout impulse leg: measured down from the high
+    for a long (up leg), up from the low for a short (down leg)."""
     span = impulse_high - impulse_low
+
+    def retrace(ratio: float) -> float:
+        if side == "short":
+            return impulse_low + ratio * span
+        return impulse_high - ratio * span
+
     return {
         "impulse_low": impulse_low,
         "impulse_high": impulse_high,
-        "fib_382": retracement_from_high(impulse_high, impulse_low, FIB_382),
-        "fib_500": retracement_from_high(impulse_high, impulse_low, FIB_500),
-        "fib_618": retracement_from_high(impulse_high, impulse_low, FIB_618),
-        "fib_786": retracement_from_high(impulse_high, impulse_low, FIB_786),
+        "fib_382": retrace(FIB_382),
+        "fib_500": retrace(FIB_500),
+        "fib_618": retrace(FIB_618),
+        "fib_786": retrace(FIB_786),
         "span": span,
     }
 
