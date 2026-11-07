@@ -22,13 +22,15 @@ interface Props {
   onPreset: (p: Preset) => void;
   onAccount: (a: AccountConfig) => void;
   lots: LotEstimate | null; // from the latest run
+  saved: { id: string; name: string }[]; // saved runs, newest first
+  onLoadSaved: (id: string) => void;
 }
 
 const pctLabel = (x: number) => `${(x * 100).toFixed(1).replace(/\.0$/, "")}%`;
 const pctOptions = (xs: number[]) => xs.map((x) => ({ value: x, label: pctLabel(x) }));
 
 /** The strategy as a recipe: one step per decision, plain-language explanation under each. */
-export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, onPreset, onAccount, lots }: Props) {
+export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, onPreset, onAccount, lots, saved, onLoadSaved }: Props) {
   const set = (patch: Partial<StrategyConfig>) => onCfg({ ...cfg, ...patch });
   const setAcc = (patch: Partial<AccountConfig>) => onAccount({ ...account, ...patch });
   const preset = matchPreset(cfg);
@@ -55,11 +57,20 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
         <label className="field">
           <span className="label">Start from</span>
           <select value={preset?.id ?? "custom"} onChange={(e) => {
-            const p = presets.find((x) => x.id === e.target.value);
+            const v = e.target.value;
+            if (v.startsWith("saved:")) return onLoadSaved(v.slice(6));
+            const p = presets.find((x) => x.id === v);
             if (p) onPreset(p);
           }}>
             {!preset && <option value="custom">Custom settings</option>}
-            {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            <optgroup label="Presets">
+              {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </optgroup>
+            {saved.length > 0 && (
+              <optgroup label="Your saved runs">
+                {saved.map((r) => <option key={r.id} value={`saved:${r.id}`}>{r.name}</option>)}
+              </optgroup>
+            )}
           </select>
           <span className="hint">{preset ? preset.description : "Edited from a preset. Pick one to start over."}</span>
         </label>

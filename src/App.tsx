@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildMarket, isoToDay, type Market } from "./engine/market";
 import type { MetricKey, Summary } from "./engine/metrics";
-import type { Candles, StrategyConfig } from "./engine/types";
+import { DEFAULT_CONFIG, type Candles, type StrategyConfig } from "./engine/types";
 import { Compare, loadRuns, saveRuns, type SavedRun } from "./ui/Compare";
 import { lotEstimate } from "./ui/analysis";
 import { DataBar } from "./ui/DataBar";
@@ -25,7 +25,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "trades", label: "Trades" },
   { id: "insights", label: "Insights" },
   { id: "optimize", label: "Optimize" },
-  { id: "compare", label: "Compare" },
+  { id: "compare", label: "Saved" }, // id kept so old #compare links still work
 ];
 const isTab = (x: string): x is Tab => TABS.some((t) => t.id === x);
 const tabFromHash = (): Tab => {
@@ -162,8 +162,17 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
     const next = [run, ...runs];
     setRuns(next);
     saveRuns(next);
-    notify(`Saved “${name}”`, { label: "Compare", run: () => setTab("compare") });
+    notify(`Saved “${name}”. Find it under Saved, or in Start from.`, { label: "View", run: () => setTab("compare") });
   }, [result, settings, file, runs, notify, setTab]);
+
+  /** Apply a saved run's settings. Runs saved before newer options existed get today's defaults for those. */
+  const loadSaved = (st: Partial<Settings>) => setSettings({
+    ...settings, ...st,
+    cfg: { ...DEFAULT_CONFIG, ...st.cfg },
+    account: { ...settings.account, ...st.account },
+    usAccount: { ...settings.usAccount, ...st.usAccount },
+    file: st.file && files.some((f) => f.file === st.file) ? st.file : settings.file,
+  }, false);
 
   const deleteRun = (run: SavedRun) => {
     const next = runs.filter((r) => r.id !== run.id);
@@ -256,6 +265,11 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
             setSettings({ ...settings, cfg: presetConfig(p), file: same?.file ?? settings.file });
           }}
           onAccount={(a) => setSettings({ ...settings, [acctKey]: a })}
+          saved={runs.map((r) => ({ id: r.id, name: r.name }))}
+          onLoadSaved={(id) => {
+            const r = runs.find((x) => x.id === id);
+            if (r) { loadSaved(r.settings); notify(`Loaded “${r.name}”`, { label: "Undo", run: history.undo }); }
+          }}
           lots={result ? lotEstimate(result.all.rows, market ? market.c.c[market.c.c.length - 1] : null, file.lotSize, account) : null} />
       </aside>
 
@@ -308,7 +322,7 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
           {tab === "compare" && (
             <Compare runs={runs} onDelete={deleteRun}
               onLoad={(st) => {
-                setSettings({ ...st, file: files.some((f) => f.file === st.file) ? st.file : settings.file }, false);
+                loadSaved(st);
                 setTab("overview");
                 notify("Loaded saved settings", { label: "Undo", run: history.undo });
               }} />

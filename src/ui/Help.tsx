@@ -6,7 +6,7 @@ const SHORTCUTS: [string, string][] = [
   ["⌘Z / Ctrl+Z", "Undo the last change"],
   ["⇧⌘Z / Ctrl+Y", "Redo"],
   ["⌘S / Ctrl+S", "Save the current run for comparison"],
-  ["1 – 5", "Switch view: Overview, Trades, Insights, Optimize, Compare"],
+  ["1 – 5", "Switch view: Overview, Trades, Insights, Optimize, Saved"],
   ["↑ / ↓", "Step through trades (with the trade list focused)"],
   ["?", "Open this help"],
 ];
