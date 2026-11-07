@@ -134,6 +134,7 @@ button:disabled { cursor: not-allowed; }
 .status .meta { font-size: 13px; line-height: 1.3; color: var(--text-3); }
 .actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .sidebar {
+  position: relative; /* keeps its absolutely-positioned bits (sr-only labels, tips) inside its scroll box */
   grid-area: side;
   overflow-y: auto;
   background: var(--surface);
@@ -141,7 +142,7 @@ button:disabled { cursor: not-allowed; }
   scrollbar-width: thin;
 }
 .sheet-head { display: none; }
-.main { grid-area: main; overflow-y: auto; padding: 16px 24px 48px; scrollbar-width: thin; }
+.main { grid-area: main; position: relative; overflow-y: auto; padding: 16px 24px 48px; scrollbar-width: thin; }
 .main > * { max-width: 1320px; margin-left: auto; margin-right: auto; }
 .edit-strategy { display: none; }
 .content { transition: opacity var(--fast) var(--ease); outline: none; scroll-margin-top: 52px; }
@@ -572,7 +573,9 @@ select { cursor: pointer; }
 @media (min-width: 901px) {
   .master-detail .detail { position: sticky; top: var(--tabs-h, 46px); z-index: 3; box-shadow: 0 8px 16px -12px rgb(0 0 0 / 0.6); }
   .master-detail .table-wrap.tall { max-height: none; overflow: visible; }
-  .master-detail .table.trades thead th { top: calc(var(--tabs-h, 46px) + var(--detail-h, 0px)); z-index: 2; }
+  .master-detail .list > .card-head { position: sticky; top: calc(var(--tabs-h, 46px) + var(--detail-h, 0px)); z-index: 2;
+    margin: -18px -18px 0; padding: 12px 18px 10px; background: var(--surface); border-bottom: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0; }
+  .master-detail .table.trades thead th { top: calc(var(--tabs-h, 46px) + var(--detail-h, 0px) + var(--listhead-h, 0px)); z-index: 2; }
   .master-detail .table.trades tbody tr { scroll-margin-top: calc(var(--tabs-h, 46px) + var(--detail-h, 0px) + 60px); /* + main padding + table header */ scroll-margin-bottom: 16px; }
 }
 
@@ -788,3 +791,8 @@ select { cursor: pointer; }
 /* Cover the main area's top padding above the sticky tabs, so scrolled content doesn't peek through
    (a shadow, because the tab bar scrolls sideways and would clip a pseudo-element). */
 .tabs { box-shadow: 0 -16px 0 var(--bg); }
+
+/* Trade description: two lines until "More" */
+.story.clamped { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }

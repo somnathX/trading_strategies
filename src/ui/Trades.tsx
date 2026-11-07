@@ -112,6 +112,9 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
   // The selected trade sticks under the tab bar on wide screens; the table header sticks under it.
   const root = useRef<HTMLDivElement>(null);
   const detail = useRef<HTMLElement>(null);
+  const listHead = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false); // full trade description instead of two lines
+  useEffect(() => setMore(false), [selected]);
   useEffect(() => {
     const row = tbody.current?.querySelector<HTMLElement>('[aria-selected="true"]');
     const head = tbody.current?.parentElement?.querySelector("thead th"); // the cells stick, not the thead box
@@ -128,21 +131,31 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
     }
     // Wide screens: the chart panel and table header are stuck on top, so "visible" means below them.
     const r = row.getBoundingClientRect();
-    const top = detail.current.getBoundingClientRect().bottom + head.getBoundingClientRect().height + 4;
+    const top = detail.current.getBoundingClientRect().bottom + (listHead.current?.offsetHeight ?? 0) + head.getBoundingClientRect().height + 4;
     const bottom = scroller.getBoundingClientRect().bottom - 8;
     if (r.top < top) scroller.scrollBy({ top: r.top - top });
     else if (r.bottom > bottom) scroller.scrollBy({ top: r.bottom - bottom });
   }, [selected]);
   const narrow = typeof matchMedia !== "undefined" && matchMedia("(max-width: 900px)").matches;
+  // Chart height follows the screen so the stuck panel leaves room for the list on laptops.
+  const [vh, setVh] = useState(() => (typeof innerHeight === "number" ? innerHeight : 900));
+  useEffect(() => {
+    const on = () => setVh(innerHeight);
+    addEventListener("resize", on);
+    return () => removeEventListener("resize", on);
+  }, []);
+  const chartH = narrow ? 260 : Math.round(Math.min(300, Math.max(170, vh * 0.26)));
   useEffect(() => {
     const tabs = document.querySelector<HTMLElement>(".tabs");
     if (!root.current || !detail.current) return;
     const set = () => {
       root.current?.style.setProperty("--tabs-h", `${tabs?.offsetHeight ?? 0}px`);
       root.current?.style.setProperty("--detail-h", `${detail.current?.offsetHeight ?? 0}px`);
+      root.current?.style.setProperty("--listhead-h", `${listHead.current?.offsetHeight ?? 0}px`);
     };
     const ro = new ResizeObserver(set);
     ro.observe(detail.current);
+    if (listHead.current) ro.observe(listHead.current);
     if (tabs) ro.observe(tabs);
     set();
     return () => ro.disconnect();
@@ -172,14 +185,15 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
               </div>
             </div>
             <div className="detail-body">
-              <div className="detail-chart" style={{ minHeight: narrow ? 260 : 280 }}>
-                <TradeChart market={market} trade={current} dayTrades={dayTrades} trend={trend} height={narrow ? 260 : 280} />
+              <div className="detail-chart" style={{ minHeight: chartH }}>
+                <TradeChart market={market} trade={current} dayTrades={dayTrades} trend={trend} height={chartH} />
               </div>
               <div className="detail-side">
-                <p className="story">{story(current, cfg)}</p>
+                <p className={`story${more ? "" : " clamped"}`}>{story(current, cfg)}</p>
                 <p className="hint">
                   {num(current.option?.pnl ?? current.pnlPoints, 1)} pts × {current.qty} = {inr(current.grossInr)}, minus {inr(current.costsInr)} costs.
                   {current.marginCapped && ` Sizing asked for ${current.wantedLots} lots; capped at ${current.lots} by capital.`}
+                  {" "}<button type="button" className="link-btn" onClick={() => setMore(!more)} aria-expanded={more}>{more ? "Less" : "More"}</button>
                 </p>
               </div>
             </div>
@@ -188,7 +202,7 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
       </section>
 
       <section className="card list" aria-labelledby="trades-h">
-        <div className="card-head">
+        <div className="card-head" ref={listHead}>
           <h2 id="trades-h">{view.length} trades <span className={`muted ${tone(total)}`}>· {inr(total)}</span></h2>
           <div className="filters">
             <select aria-label="Side" value={side} onChange={(e) => setSide(e.target.value as typeof side)}>
