@@ -109,10 +109,44 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
   const index = view.findIndex((r) => r.entryTime === selected);
   const total = view.reduce((s, r) => s + r.netInr, 0);
   const tbody = useRef<HTMLTableSectionElement>(null);
+  // The selected trade sticks under the tab bar on wide screens; the table header sticks under it.
+  const root = useRef<HTMLDivElement>(null);
+  const detail = useRef<HTMLElement>(null);
   useEffect(() => {
-    tbody.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    const row = tbody.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+    const head = tbody.current?.parentElement?.querySelector("thead th"); // the cells stick, not the thead box
+    const scroller = root.current?.closest("main");
+    if (!row) return;
+    if (!head || !scroller || !detail.current || getComputedStyle(detail.current).position !== "sticky") {
+      // Phone: the list scrolls in its own box; move only that box, so a tap can still bring the chart into view.
+      const box = row.closest<HTMLElement>(".table-wrap");
+      if (!box) return;
+      const r = row.getBoundingClientRect(), b = box.getBoundingClientRect(), headH = head?.getBoundingClientRect().height ?? 0;
+      if (r.top < b.top + headH) box.scrollTop += r.top - b.top - headH;
+      else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
+      return;
+    }
+    // Wide screens: the chart panel and table header are stuck on top, so "visible" means below them.
+    const r = row.getBoundingClientRect();
+    const top = detail.current.getBoundingClientRect().bottom + head.getBoundingClientRect().height + 4;
+    const bottom = scroller.getBoundingClientRect().bottom - 8;
+    if (r.top < top) scroller.scrollBy({ top: r.top - top });
+    else if (r.bottom > bottom) scroller.scrollBy({ top: r.bottom - bottom });
   }, [selected]);
-  const narrow = typeof matchMedia !== "undefined" && matchMedia("(max-width: 1100px)").matches;
+  const narrow = typeof matchMedia !== "undefined" && matchMedia("(max-width: 900px)").matches;
+  useEffect(() => {
+    const tabs = document.querySelector<HTMLElement>(".tabs");
+    if (!root.current || !detail.current) return;
+    const set = () => {
+      root.current?.style.setProperty("--tabs-h", `${tabs?.offsetHeight ?? 0}px`);
+      root.current?.style.setProperty("--detail-h", `${detail.current?.offsetHeight ?? 0}px`);
+    };
+    const ro = new ResizeObserver(set);
+    ro.observe(detail.current);
+    if (tabs) ro.observe(tabs);
+    set();
+    return () => ro.disconnect();
+  }, []);
   const move = (delta: number) => {
     const next = view[Math.max(0, Math.min(view.length - 1, (index < 0 ? 0 : index) + delta))];
     if (next) setSelected(next.entryTime);
@@ -121,8 +155,8 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
   if (!rows.length) return <p className="empty">No trades to list. Loosen the entry filters or widen the dates.</p>;
 
   return (
-    <div className="master-detail">
-      <section className="card detail" aria-label="Selected trade">
+    <div className="master-detail" ref={root}>
+      <section className="card detail" aria-label="Selected trade" ref={detail}>
         {current && market ? (
           <>
             <div className="detail-head">
@@ -138,8 +172,8 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
               </div>
             </div>
             <div className="detail-body">
-              <div className="detail-chart">
-                <TradeChart market={market} trade={current} dayTrades={dayTrades} trend={trend} height={narrow ? 260 : 320} />
+              <div className="detail-chart" style={{ minHeight: narrow ? 260 : 280 }}>
+                <TradeChart market={market} trade={current} dayTrades={dayTrades} trend={trend} height={narrow ? 260 : 280} />
               </div>
               <div className="detail-side">
                 <p className="story">{story(current, cfg)}</p>
@@ -190,7 +224,10 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
             </thead>
             <tbody ref={tbody}>
               {view.map((r) => (
-                <tr key={r.entryTime} aria-selected={r.entryTime === selected} onClick={() => setSelected(r.entryTime)}>
+                <tr key={r.entryTime} aria-selected={r.entryTime === selected} onClick={() => {
+                  setSelected(r.entryTime);
+                  if (narrow) detail.current?.scrollIntoView({ block: "start" }); // phone: panel isn't stuck
+                }}>
                   {COLS.map((c) => (
                     <td key={c.key} className={`${c.num ? "num" : ""} ${c.key === "net" || c.key === "pts" ? tone(c.get(r) as number) : ""}`}>
                       {c.render ? c.render(r) : String(c.get(r))}

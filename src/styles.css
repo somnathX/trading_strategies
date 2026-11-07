@@ -563,13 +563,17 @@ select { cursor: pointer; }
 .detail-head h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 16px; margin: 0; }
 .detail-traded { font-family: var(--mono); font-size: 13px; color: var(--text-2); }
 .detail-pnl { font-family: var(--mono); }
-.detail-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 16px; align-items: start; }
+.detail-body { display: grid; gap: 10px; }
 .detail-chart { min-width: 0; }
-.detail-side { font-size: 13px; }
-.story { margin: 0 0 6px; color: var(--text-2); line-height: 1.55; text-wrap: pretty; }
+.detail-side { font-size: 13px; border-top: 1px solid var(--border); padding-top: 10px; }
+.story { margin: 0 0 4px; color: var(--text-2); line-height: 1.5; text-wrap: pretty; }
 .pager { display: flex; align-items: center; gap: 4px; flex: none; }
-@media (max-width: 900px) {
-  .detail-body { grid-template-columns: minmax(0, 1fr); }
+/* Wide screens: the selected trade stays put under the tabs; the page scrolls the table beneath it. */
+@media (min-width: 901px) {
+  .master-detail .detail { position: sticky; top: var(--tabs-h, 46px); z-index: 3; box-shadow: 0 8px 16px -12px rgb(0 0 0 / 0.6); }
+  .master-detail .table-wrap.tall { max-height: none; overflow: visible; }
+  .master-detail .table.trades thead th { top: calc(var(--tabs-h, 46px) + var(--detail-h, 0px)); z-index: 2; }
+  .master-detail .table.trades tbody tr { scroll-margin-top: calc(var(--tabs-h, 46px) + var(--detail-h, 0px) + 60px); /* + main padding + table header */ scroll-margin-bottom: 16px; }
 }
 
 /* ---------- Insights ---------- */
@@ -781,5 +785,6 @@ select { cursor: pointer; }
 /* Trades table: date over weekday + time */
 .when { display: flex; flex-direction: column; line-height: 1.25; white-space: nowrap; }
 .when-sub { font-size: 0.85em; color: var(--text-3); }
-/* Keep the selected trade's chart and the list on one screen: the list scrolls inside its box. */
-.master-detail .table-wrap.tall { max-height: max(300px, calc(100vh - 540px)); }
+/* Cover the main area's top padding above the sticky tabs, so scrolled content doesn't peek through
+   (a shadow, because the tab bar scrolls sideways and would clip a pseudo-element). */
+.tabs { box-shadow: 0 -16px 0 var(--bg); }
