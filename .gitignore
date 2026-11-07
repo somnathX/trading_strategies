@@ -1,16 +1,7 @@
+node_modules/
+dist/
+.cache/
 .env
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
-venv/
+.DS_Store
+# Old Python-era Dhan downloads, kept locally only
 data/cache/
-data/ui_prefs.json
-data/sensex_ui_prefs.json
-
-# Ignore parquet by default; track bundled market data
-*.parquet
-!data/**/*.parquet
-
-# Optional CSV alongside parquet
-!data/**/*.csv
