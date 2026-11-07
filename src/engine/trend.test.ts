@@ -113,6 +113,14 @@ describe("MA cross + SuperTrend", () => {
     expect(against.filter((j) => entries.has(j))).toEqual([]);
   });
 
+  it("takes no new entries on candles starting at or after the cutoff time", () => {
+    const late = runBacktest(m, trendCfg({ trendLastEntry: "13:00" }));
+    const minute = (t: number) => m.minute[lowerBound(m.c.t, t)];
+    expect(trades.some((t) => minute(t.entryTime) >= 13 * 60)).toBe(true); // the filter matters on this data
+    expect(late.length).toBeGreaterThan(0);
+    expect(late.every((t) => minute(t.entryTime) < 13 * 60)).toBe(true);
+  });
+
   it("does not enter before the start day", () => {
     const from = m.dates[20];
     expect(runBacktest(m, cfg, from).every((t) => m.day[lowerBound(m.c.t, t.entryTime)] >= from)).toBe(true);

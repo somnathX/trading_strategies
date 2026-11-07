@@ -1,4 +1,5 @@
-import { DEFAULT_ACCOUNT, type AccountConfig } from "../engine/metrics";
+import { DEFAULT_ACCOUNT, DEFAULT_US_ACCOUNT, type AccountConfig } from "../engine/metrics";
+import { NSE, type Session } from "../engine/market";
 import { DEFAULT_CONFIG, type StrategyConfig } from "../engine/types";
 import { load, save } from "./storage";
 
@@ -12,7 +13,13 @@ export interface DataFile {
   from: string;
   to: string;
   bars: number;
+  session?: Session; // trading hours; NSE when absent
+  currency?: "INR" | "USD";
+  contract?: string; // what lotSize means, e.g. "MES ($5/pt)"
 }
+
+export const sessionOf = (f: DataFile) => f.session ?? NSE;
+export const isUsd = (f: DataFile) => f.currency === "USD";
 
 export interface Settings {
   file: string;
@@ -21,7 +28,8 @@ export interface Settings {
   oosEnabled: boolean;
   oosFrom: string;
   cfg: StrategyConfig;
-  account: AccountConfig;
+  account: AccountConfig; // ₹ instruments
+  usAccount: AccountConfig; // $ instruments
 }
 
 const KEY = "orb:settings:v1";
@@ -56,6 +64,7 @@ export function defaultSettings(files: DataFile[]): Settings {
     oosFrom: shiftYears(to, -0.5),
     cfg: DEFAULT_CONFIG,
     account: DEFAULT_ACCOUNT,
+    usAccount: DEFAULT_US_ACCOUNT,
   };
 }
 
@@ -63,7 +72,7 @@ export function defaultSettings(files: DataFile[]): Settings {
 export function loadSettings(files: DataFile[]): Settings {
   const d = defaultSettings(files);
   const s = load<Partial<Settings>>(KEY, {});
-  const merged: Settings = { ...d, ...s, cfg: { ...d.cfg, ...s.cfg }, account: { ...d.account, ...s.account } };
+  const merged: Settings = { ...d, ...s, cfg: { ...d.cfg, ...s.cfg }, account: { ...d.account, ...s.account }, usAccount: { ...d.usAccount, ...s.usAccount } };
   // NSE futures transaction charge moved from 0.00173% to 0.00183%: update the old default.
   if (merged.account.exchangePct === 0.00173) merged.account.exchangePct = d.account.exchangePct;
   return files.some((f) => f.file === merged.file) ? merged : d;

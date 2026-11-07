@@ -15,7 +15,23 @@ export interface AccountConfig {
   sebiPerCrore: number; // ₹ per ₹1 crore turnover
   stampBuyPct: number; // % of buy turnover
   gstPct: number; // on brokerage + exchange + SEBI fees
+  feePerLot?: number; // flat commission + exchange fees per contract per side (US futures style)
+  vehicle?: "futures" | "options"; // options: buy an in-the-money call (long) or put (short)
+  itmStrikes?: number; // options: strikes in the money
+  minDte?: number; // options: calendar days to expiry needed, else next month
 }
+
+/** Zerodha index-option buying charges (Nov 2026): ₹20/order, STT 0.15% of sell premium, NSE 0.03503%, stamp 0.003% buy. */
+export const OPTION_CHARGES: Partial<AccountConfig> = {
+  brokeragePerOrder: 20,
+  brokeragePct: 100, // flat ₹20 (or the order value, if smaller)
+  sttSellPct: 0.15,
+  exchangePct: 0.03503,
+  sebiPerCrore: 10,
+  stampBuyPct: 0.003,
+  gstPct: 18,
+  marginPct: 100, // you pay the full premium
+};
 
 /** Index-futures defaults (Zerodha's published futures rates, Nov 2026); check your own contract note. */
 export const DEFAULT_ACCOUNT: AccountConfig = {
@@ -32,6 +48,22 @@ export const DEFAULT_ACCOUNT: AccountConfig = {
   sebiPerCrore: 10,
   stampBuyPct: 0.002,
   gstPct: 18,
+};
+
+/** US index futures (CME micro E-mini): flat per-contract fees, no turnover taxes. Capital in $. */
+export const DEFAULT_US_ACCOUNT: AccountConfig = {
+  ...DEFAULT_ACCOUNT,
+  capital: 25_000,
+  marginPct: 8, // MES/ES initial margin is roughly 6–9% of contract value
+  exitSlippagePoints: 0.25, // one tick
+  brokeragePerOrder: 0,
+  brokeragePct: 0,
+  sttSellPct: 0,
+  exchangePct: 0,
+  sebiPerCrore: 0,
+  stampBuyPct: 0,
+  gstPct: 0,
+  feePerLot: 0.62, // e.g. IBKR MES: commission + exchange + regulatory, per side
 };
 
 export interface TradeRow extends Trade {
@@ -91,25 +123,29 @@ export function maxLotsByMargin(price: number, lotSize: number, a: AccountConfig
 }
 
 export function sizeAndCost(t: Trade, lotSize: number, a: AccountConfig): TradeRow {
-  const stopPts = Math.abs(t.entryPrice - t.stopPrice);
+  // With options, everything below is in premium: you always buy first and sell later (calls and puts alike).
+  const o = t.option;
+  const entry = o ? o.entry : t.entryPrice;
+  const stopPts = o ? o.entry - o.stop : Math.abs(t.entryPrice - t.stopPrice);
   const wantedLots =
     a.sizing === "fixed" || stopPts <= 0
       ? Math.max(1, Math.floor(a.fixedLots))
       : Math.max(1, Math.floor((a.capital * a.riskPct) / 100 / (stopPts * lotSize)));
   // A very tight stop would otherwise ask for more lots than the capital could ever margin.
-  const lots = Math.min(wantedLots, maxLotsByMargin(t.entryPrice, lotSize, a));
+  const lots = Math.min(wantedLots, maxLotsByMargin(entry, lotSize, a));
   const qty = lots * lotSize;
-  const exitPrice = t.side === "long" ? t.exitPrice - a.exitSlippagePoints : t.exitPrice + a.exitSlippagePoints;
-  const [buy, sell] = t.side === "long" ? [t.entryPrice * qty, exitPrice * qty] : [exitPrice * qty, t.entryPrice * qty];
+  const long = o ? true : t.side === "long";
+  const exitPrice = o ? o.exit - a.exitSlippagePoints : long ? t.exitPrice - a.exitSlippagePoints : t.exitPrice + a.exitSlippagePoints;
+  const [buy, sell] = long ? [entry * qty, exitPrice * qty] : [exitPrice * qty, entry * qty];
   // Brokerage: per executed order, the lower of the flat fee and a % of that order's value.
-  const fills = t.outcome.split("+").length; // exit orders (partial target exits count separately)
+  const fills = t.outcome.split("+").length + (o ? 2 * o.rolls : 0); // exit orders (partial exits and option rolls count separately)
   const perOrder = (value: number) => Math.min(a.brokeragePerOrder, (value * (a.brokeragePct ?? 100)) / 100);
-  const brokerage = qty === 0 ? 0 : perOrder(t.entryPrice * qty) + fills * perOrder((exitPrice * qty) / fills);
+  const brokerage = qty === 0 ? 0 : perOrder(entry * qty) + fills * perOrder((exitPrice * qty) / fills);
   const exchange = ((buy + sell) * a.exchangePct) / 100;
   const sebi = ((buy + sell) * a.sebiPerCrore) / 1e7;
   const charges = brokerage + exchange + sebi + (sell * a.sttSellPct) / 100 + (buy * a.stampBuyPct) / 100
-    + ((brokerage + exchange + sebi) * a.gstPct) / 100;
-  const grossInr = t.pnlPoints * qty;
+    + ((brokerage + exchange + sebi) * a.gstPct) / 100 + (a.feePerLot ?? 0) * lots * (1 + fills);
+  const grossInr = (o ? o.pnl : t.pnlPoints) * qty;
   const costsInr = a.exitSlippagePoints * qty + charges;
   return { ...t, lots, qty, riskInr: stopPts * qty, wantedLots, marginCapped: lots < wantedLots, grossInr, costsInr, netInr: grossInr - costsInr };
 }

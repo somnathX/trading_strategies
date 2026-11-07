@@ -2,12 +2,26 @@ import { dayOf, isoToDay } from "../engine/market";
 
 const IST_OFFSET = 19800;
 
+// ponytail: one app-wide currency, set by App for the selected instrument; pass it around if two ever show at once.
+let currency: "INR" | "USD" = "INR";
+export const setCurrency = (c: "INR" | "USD") => { currency = c; };
+export const cur = () => (currency === "USD" ? "$" : "₹");
+const locale = () => (currency === "USD" ? "en-US" : "en-IN");
+/** Whole number with the currency's digit grouping (12,34,567 or 1,234,567). */
+export const group = (x: number) => Math.round(x).toLocaleString(locale());
+
+/** Money in the selected instrument's currency (₹ or $). */
 export const inr = (x: number, digits = 0) =>
-  `${x < 0 ? "−" : ""}₹${Math.abs(x).toLocaleString("en-IN", { maximumFractionDigits: digits, minimumFractionDigits: digits })}`;
-/** ₹ in lakh / crore once amounts get large (₹7.66 L, ₹1.2 Cr). */
+  `${x < 0 ? "−" : ""}${cur()}${Math.abs(x).toLocaleString(locale(), { maximumFractionDigits: digits, minimumFractionDigits: digits })}`;
+/** Large amounts: ₹ in lakh / crore (₹7.66 L, ₹1.2 Cr), $ in thousands / millions ($12.5K, $1.20M). */
 export const inrShort = (x: number) => {
   const a = Math.abs(x);
   const sign = x < 0 ? "−" : "";
+  if (currency === "USD") {
+    if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
+    if (a >= 1e4) return `${sign}$${(a / 1e3).toFixed(1)}K`;
+    return inr(x);
+  }
   if (a >= 1e7) return `${sign}₹${(a / 1e7).toFixed(2)} Cr`;
   if (a >= 1e5) return `${sign}₹${(a / 1e5).toFixed(2)} L`;
   return inr(x);

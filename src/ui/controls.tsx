@@ -76,6 +76,18 @@ export function Num({ value, onChange, label, suffix, ...rest }: {
   return suffix ? <span className="with-suffix">{input}<span className="suffix" aria-hidden="true">{suffix}</span></span> : input;
 }
 
+/** Optional "HH:MM" time with a Clear button (a native time box can't be emptied in every browser). */
+export function TimeOrOff({ value, onChange, label, min, max }: {
+  value: string | null; onChange: (v: string | null) => void; label?: string; min?: string; max?: string;
+}) {
+  return (
+    <span className="time-or-off">
+      <input type="time" aria-label={label} value={value ?? ""} min={min} max={max} onChange={(e) => onChange(e.target.value || null)} />
+      {value && <button type="button" className="btn small ghost" onClick={() => onChange(null)} aria-label={label ? `Clear ${label}` : "Clear time"}>Clear</button>}
+    </span>
+  );
+}
+
 /** Small (i) that explains a term on hover or keyboard focus. */
 export function Info({ text, label }: { text: string; label: string }) {
   const id = useId();

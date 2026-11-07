@@ -1,5 +1,5 @@
 import { ema, sma, supertrend, type SuperTrend } from "./indicators";
-import { dayToISO, type Market } from "./market";
+import { dayToISO, hmToMinutes, type Market } from "./market";
 import type { Side, StrategyConfig, Trade } from "./types";
 
 export interface TrendSeries {
@@ -38,6 +38,7 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
   const { c, t } = m.c;
   // EMAs are seeded from the first candle, so give them a few periods to settle.
   const warm = Math.max(cfg.maSlow, cfg.stPeriod) * 3;
+  const cutoff = cfg.trendLastEntry ? hmToMinutes(cfg.trendLastEntry) : Infinity;
   const trades: Trade[] = [];
   let pos: { side: Side; k: number; price: number; stop: number } | null = null;
 
@@ -79,7 +80,7 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
       else if (cfg.trendCloseEod && lastOfDay) close(k, "eod");
     }
 
-    if (pos || k < warm || m.day[i] < fromDay || (cfg.trendCloseEod && lastOfDay)) continue;
+    if (pos || k < warm || m.day[i] < fromDay || (cfg.trendCloseEod && lastOfDay) || m.minute[i] >= cutoff) continue;
     const crossUp = fast[k - 1] <= slow[k - 1] && fast[k] > slow[k];
     const crossDown = fast[k - 1] >= slow[k - 1] && fast[k] < slow[k];
     const side: Side | null = crossUp && st.up[k] ? "long" : crossDown && !st.up[k] ? "short" : null;

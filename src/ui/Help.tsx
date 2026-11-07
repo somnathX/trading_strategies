@@ -40,7 +40,7 @@ export function Help({ open, onClose }: { open: boolean; onClose: () => void }) 
           <li>Signals use 5- or 15-minute candles of the spot index or stock; P&amp;L is in futures lots of the current lot size.</li>
           <li>Entries fill at the signal candle's close plus slippage. Stops and targets are checked from the next candle on.</li>
           <li>If a candle touches both the stop and a target, the stop is assumed to come first. Gaps through the stop fill at the open.</li>
-          <li>Opening-range trades are closed by 15:00. MA cross + SuperTrend uses every candle from 09:15 to 15:30 (as a chart does), holds overnight until SuperTrend flips unless set to close at day end, and warms its indicators up on history before the test period. It doesn't model rolling futures at expiry.</li>
+          <li>Opening-range trades are closed by 15:00. MA cross + SuperTrend uses every candle of the session (09:15–15:30 on NSE, 09:30–16:00 New York time for SPX), as a chart does, holds overnight until SuperTrend flips unless set to close at day end, and warms its indicators up on history before the test period. It doesn't model rolling futures at expiry.</li>
           <li>Sizing is on starting capital (no compounding).</li>
           <li>Costs: slippage both ways, brokerage per order, STT on the sell side, exchange and SEBI fees, stamp duty on the buy side, GST.</li>
         </ul>

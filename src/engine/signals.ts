@@ -1,4 +1,4 @@
-import { dayStart, hmToMinutes, SESSION_OPEN, type Market } from "./market";
+import { dayStart, hmToMinutes, type Market } from "./market";
 import type { Side, Signal, StrategyConfig, Triple } from "./types";
 
 export const VALID_ORB_MINUTES = [15, 30, 45, 60];
@@ -13,7 +13,7 @@ export interface OpeningRange {
 export function openingRange(m: Market, session: number[] | undefined, orbMinutes: number): OpeningRange | null {
   if (!VALID_ORB_MINUTES.includes(orbMinutes)) throw new Error(`orbMinutes must be one of ${VALID_ORB_MINUTES}`);
   if (!session || session.length === 0) return null;
-  const endMinute = SESSION_OPEN + orbMinutes;
+  const endMinute = m.session.open + orbMinutes;
   let high = -Infinity;
   let low = Infinity;
   let any = false;

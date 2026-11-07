@@ -22,6 +22,7 @@ export interface StrategyConfig {
   stPeriod: number; // SuperTrend ATR period
   stMultiplier: number; // SuperTrend ATR multiple
   trendCloseEod: boolean; // flatten at the session close instead of holding overnight
+  trendLastEntry: string | null; // "HH:MM": no new MA-cross entries on candles starting at/after this time
   // --- Opening range breakout ---
   orbMinutes: number; // 15 | 30 | 45 | 60
   entryMode: "breakout" | "fib_pullback";
@@ -57,6 +58,7 @@ export const DEFAULT_CONFIG: StrategyConfig = {
   stPeriod: 10,
   stMultiplier: 3,
   trendCloseEod: false,
+  trendLastEntry: null,
   orbMinutes: 15,
   entryMode: "breakout",
   fibEntryLevel: 0.5,
@@ -115,4 +117,5 @@ export interface Trade {
   maxHoldSessions: number;
   impulseLow: number | null;
   impulseHigh: number | null;
+  option?: import("./options").OptionLeg; // set when the trade is taken with options instead of futures
 }

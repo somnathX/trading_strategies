@@ -27,7 +27,7 @@ export function Insights({ evaluation, onPickDay }: { evaluation: Evaluation; on
       <section className="card" aria-labelledby="dist-h">
         <div className="card-head">
           <h2 id="dist-h">Spread of trade results</h2>
-          <span className="hint">Net ₹ per trade. Healthy systems have a right tail of big wins and cut losses short.</span>
+          <span className="hint">Net profit per trade. Healthy systems have a right tail of big wins and cut losses short.</span>
         </div>
         <Histogram rows={rows} />
       </section>

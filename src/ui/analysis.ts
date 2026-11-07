@@ -1,5 +1,5 @@
 import { minuteOf } from "../engine/market";
-import type { TradeRow } from "../engine/metrics";
+import { maxLotsByMargin, type AccountConfig, type TradeRow } from "../engine/metrics";
 import type { RunResult } from "../worker";
 import { fmtDay, fmtISO, inrShort, num, pct } from "./format";
 
@@ -130,4 +130,27 @@ export function histogram(values: number[], n = 24): Bin[] {
   const bins: Bin[] = Array.from({ length: n }, (_, k) => ({ from: lo + k * width, to: lo + (k + 1) * width, count: 0 }));
   for (const v of values) bins[Math.min(n - 1, Math.floor((v - lo) / width))].count++;
   return bins;
+}
+
+export interface LotEstimate {
+  median: number;
+  min: number;
+  max: number;
+  capped: number; // trades where capital, not the risk %, set the size
+  stopPts: number; // median distance from entry to the stop (index points, or premium points for options)
+  maxNow: number | null; // lots the capital can carry at the latest price (futures only)
+}
+
+/** How many lots this run actually traded, and what the capital allows at today's price. */
+export function lotEstimate(rows: TradeRow[], lastPrice: number | null, lotSize: number, a: AccountConfig): LotEstimate | null {
+  const sized = rows.filter((r) => r.lots > 0);
+  if (!sized.length) return null;
+  const mid = <T,>(xs: T[]) => xs[xs.length >> 1];
+  const lots = sized.map((r) => r.lots).sort((x, y) => x - y);
+  const stops = sized.map((r) => (r.option ? r.option.entry - r.option.stop : Math.abs(r.entryPrice - r.stopPrice))).sort((x, y) => x - y);
+  const options = sized.some((r) => r.option);
+  return {
+    median: mid(lots), min: lots[0], max: lots[lots.length - 1], capped: sized.filter((r) => r.marginCapped).length,
+    stopPts: mid(stops), maxNow: !options && lastPrice ? maxLotsByMargin(lastPrice, lotSize, a) : null,
+  };
 }

@@ -5,24 +5,47 @@ import { trendSeries } from "../engine/trend";
 import type { StrategyConfig } from "../engine/types";
 import { finalExit } from "./analysis";
 import { TradeChart, type TrendOverlay } from "./charts";
-import { date, fmtISO, inr, num, shortDateTime, time, tone } from "./format";
+import { date, fmtISO, inr, num, time, tone } from "./format";
 import { ArrowIcon } from "./icons";
 import { EXIT_LABELS } from "./metricsMeta";
 
 type Col = { key: string; label: string; get: (r: TradeRow) => number | string; render?: (r: TradeRow) => ReactNode; num?: boolean };
 
+/** Date on one line, weekday and time under it: "20/12/2023" / "Wed 15:15". */
+const When = ({ t }: { t: number }) => {
+  const [d, wd] = date(t).split(" ");
+  return <span className="when"><span>{d}</span><span className="when-sub">{wd} {time(t)}</span></span>;
+};
+/** What was actually bought or sold: futures, or the option strike, type and expiry. */
+const traded = (r: TradeRow) => (r.option ? `${r.option.strike} ${r.option.type}` : "Futures");
+
 const COLS: Col[] = [
-  { key: "date", label: "Date", get: (r) => r.entryTime, render: (r) => date(r.entryTime) },
+  { key: "in", label: "In", get: (r) => r.entryTime, render: (r) => <When t={r.entryTime} /> },
+  { key: "out", label: "Out", get: (r) => r.exitTime, render: (r) => <When t={r.exitTime} /> },
   { key: "side", label: "Side", get: (r) => r.side, render: (r) => <span className={`side-tag ${r.side}`}>{r.side}</span> },
-  { key: "in", label: "In", get: (r) => r.entryTime % 86400, render: (r) => time(r.entryTime) },
-  { key: "out", label: "Out", get: (r) => r.exitTime, render: (r) => (r.holdDays > 1 ? shortDateTime(r.exitTime) : time(r.exitTime)) },
-  { key: "pts", label: "Points", get: (r) => r.pnlPoints, render: (r) => num(r.pnlPoints, 1), num: true },
-  { key: "net", label: "Net ₹", get: (r) => r.netInr, render: (r) => inr(r.netInr), num: true },
-  { key: "exit", label: "Exit", get: (r) => finalExit(r), render: (r) => EXIT_LABELS[finalExit(r)] ?? finalExit(r) },
+  { key: "traded", label: "Traded", get: traded, render: (r) => (r.option
+    ? <span className="when"><span>{traded(r)}</span><span className="when-sub">exp {fmtISO(r.option.expiry, false)}{r.option.rolls ? ` · rolled ${r.option.rolls}×` : ""}</span></span>
+    : "Futures") },
+  { key: "lots", label: "Lots", get: (r) => r.lots, num: true,
+    render: (r) => (r.marginCapped ? <span title={`Sizing asked for ${r.wantedLots}; capped by capital`}>{r.lots}*</span> : r.lots) },
+  { key: "entry", label: "Entry", get: (r) => r.option?.entry ?? r.entryPrice, render: (r) => num(r.option?.entry ?? r.entryPrice), num: true },
+  { key: "exitpx", label: "Exit", get: (r) => r.option?.exit ?? r.exitPrice, render: (r) => num(r.option?.exit ?? r.exitPrice), num: true },
+  { key: "pts", label: "Points", get: (r) => r.option?.pnl ?? r.pnlPoints, render: (r) => num(r.option?.pnl ?? r.pnlPoints, 1), num: true },
+  { key: "net", label: "Net", get: (r) => r.netInr, render: (r) => inr(r.netInr), num: true },
+  { key: "exit", label: "Reason", get: (r) => finalExit(r), render: (r) => EXIT_LABELS[finalExit(r)] ?? finalExit(r) },
 ];
 
 /** One sentence that says what happened in the trade. */
 function story(r: TradeRow, cfg: StrategyConfig): string {
+  const o = r.option;
+  if (!o) return underlyingStory(r, cfg);
+  const leg = `${o.strike} ${o.type === "CE" ? "call" : "put"}`;
+  const roll = o.rolls ? ` Rolled to the next month ${o.rolls} time${o.rolls > 1 ? "s" : ""}, ending in the ${fmtISO(o.expiry)} expiry.` : "";
+  return `${underlyingStory(r, cfg).replace(/^(Bought|Sold short) [^ ]+ lots? \(\d+\) at/, "Index at")} Traded as the ${leg} (${fmtISO(o.expiry, false)} expiry, `
+    + `IV ${(o.iv * 100).toFixed(1)}%, delta ${o.delta.toFixed(2)}): ${r.lots} lot${r.lots > 1 ? "s" : ""} (${r.qty}) bought at ${num(o.entry)}, worth ${num(o.exit)} at exit, ${o.pnl >= 0 ? "+" : ""}${num(o.pnl)} per unit.${roll}`;
+}
+
+function underlyingStory(r: TradeRow, cfg: StrategyConfig): string {
   const dir = r.side === "long" ? "Bought" : "Sold short";
   const size = `${r.lots} lot${r.lots > 1 ? "s" : ""} (${r.qty})`;
   if (r.entryStyle === "ma_cross") {
@@ -50,7 +73,7 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
     const ma = cfg.maType.toUpperCase();
     return { series, pos: new Map(series.bars.map((b, k) => [b, k])), fastLabel: `${ma} ${cfg.maFast}`, slowLabel: `${ma} ${cfg.maSlow}` };
   }, [market, cfg]);
-  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: "date", dir: 1 });
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: "in", dir: 1 });
   const [side, setSide] = useState<"all" | "long" | "short">("all");
   const [result, setResult] = useState<"all" | "win" | "loss">("all");
   const [exit, setExit] = useState("all");
@@ -103,24 +126,29 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
         {current && market ? (
           <>
             <div className="detail-head">
-              <div>
-                <h2>
-                  <span className={`side-tag ${current.side}`}>{current.side}</span> {fmtISO(current.sessionDate)}
-                  <span className={`detail-pnl ${tone(current.netInr)}`}>{inr(current.netInr)}</span>
-                </h2>
-                <p className="story">{story(current, cfg)}</p>
-                <p className="hint">
-                  {num(current.pnlPoints, 1)} pts × {current.qty} = {inr(current.grossInr)}, minus {inr(current.costsInr)} costs.
-                  {current.marginCapped && ` Sizing asked for ${current.wantedLots} lots (stop only ${num(Math.abs(current.entryPrice - current.stopPrice), 1)} pts away); capped at ${current.lots} by margin.`}
-                </p>
-              </div>
+              <h2>
+                <span className={`side-tag ${current.side}`}>{current.side}</span> {fmtISO(current.sessionDate)}
+                <span className="detail-traded">{current.option ? `${current.option.strike} ${current.option.type}` : "Futures"} · {current.lots} lot{current.lots > 1 ? "s" : ""}</span>
+                <span className={`detail-pnl ${tone(current.netInr)}`}>{inr(current.netInr)}</span>
+              </h2>
               <div className="pager">
                 <button type="button" className="icon-btn" onClick={() => move(-1)} disabled={index <= 0} aria-label="Previous trade"><ArrowIcon dir="left" /></button>
                 <span className="hint mono">{index + 1} / {view.length}</span>
                 <button type="button" className="icon-btn" onClick={() => move(1)} disabled={index >= view.length - 1} aria-label="Next trade"><ArrowIcon dir="right" /></button>
               </div>
             </div>
-            <TradeChart market={market} trade={current} dayTrades={dayTrades} trend={trend} height={narrow ? 300 : 400} />
+            <div className="detail-body">
+              <div className="detail-chart">
+                <TradeChart market={market} trade={current} dayTrades={dayTrades} trend={trend} height={narrow ? 260 : 320} />
+              </div>
+              <div className="detail-side">
+                <p className="story">{story(current, cfg)}</p>
+                <p className="hint">
+                  {num(current.option?.pnl ?? current.pnlPoints, 1)} pts × {current.qty} = {inr(current.grossInr)}, minus {inr(current.costsInr)} costs.
+                  {current.marginCapped && ` Sizing asked for ${current.wantedLots} lots; capped at ${current.lots} by capital.`}
+                </p>
+              </div>
+            </div>
           </>
         ) : <p className="empty">{market ? "Select a trade to chart it." : "Loading candles…"}</p>}
       </section>

@@ -54,6 +54,17 @@ describe("costs and sizing", () => {
   });
 });
 
+describe("US futures costs", () => {
+  it("charges a flat fee per contract per side and no Indian taxes (MES, $5/pt)", async () => {
+    const { DEFAULT_US_ACCOUNT } = await import("./metrics");
+    // $25k, 1% risk = $250; 20-pt stop × $5 = $100 per contract → 2 contracts.
+    const r = sizeAndCost(trade({ entryPrice: 6000, exitPrice: 6100, pnlPoints: 100, stopPrice: 5980, outcome: "st_flip" }), 5, DEFAULT_US_ACCOUNT);
+    expect([r.lots, r.qty, r.grossInr]).toEqual([2, 10, 1000]);
+    // 0.25 pt exit slippage × 10 = $2.50; fees 0.62 × 2 contracts × 2 sides = $2.48.
+    expect(r.costsInr).toBeCloseTo(4.98, 6);
+  });
+});
+
 describe("evaluate", () => {
   it("builds equity, drawdown and win rate over all sessions", () => {
     const days = ["2026-01-05", "2026-01-06", "2026-01-07"].map(isoToDay);

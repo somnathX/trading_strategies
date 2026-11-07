@@ -557,17 +557,19 @@ select { cursor: pointer; }
 .side-tag.short { color: var(--neg); background: color-mix(in oklab, var(--neg) 14%, transparent); }
 
 /* ---------- Trades: master / detail ---------- */
-.master-detail { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.master-detail .detail { order: 2; position: sticky; top: 46px; }
-.master-detail .list { order: 1; }
-.detail-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.detail-head h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 16px; }
+/* Selected trade on top (chart + story side by side), full-width table below. */
+.master-detail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.detail-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.detail-head h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 16px; margin: 0; }
+.detail-traded { font-family: var(--mono); font-size: 13px; color: var(--text-2); }
 .detail-pnl { font-family: var(--mono); }
-.story { margin: 8px 0 4px; color: var(--text-2); line-height: 1.55; text-wrap: pretty; }
-.pager { display: flex; align-items: center; gap: 4px; flex: none; align-self: flex-start; }
-@media (max-width: 1280px) {
-  .master-detail { grid-template-columns: minmax(0, 1fr); }
-  .master-detail .detail { order: 0; position: static; }
+.detail-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 16px; align-items: start; }
+.detail-chart { min-width: 0; }
+.detail-side { font-size: 13px; }
+.story { margin: 0 0 6px; color: var(--text-2); line-height: 1.55; text-wrap: pretty; }
+.pager { display: flex; align-items: center; gap: 4px; flex: none; }
+@media (max-width: 900px) {
+  .detail-body { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---------- Insights ---------- */
@@ -766,3 +768,18 @@ select { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
+
+/* Position size: lots actually traded */
+.lots-note { margin-top: var(--space-2, 8px); padding: 10px 12px; border-radius: 8px; background: var(--surface-2, rgba(127,127,127,.08)); }
+.lots-note p { margin: 0; }
+.lots-note p + p { margin-top: 4px; }
+
+/* Time box with a Clear button */
+.time-or-off { display: flex; gap: 8px; align-items: center; }
+.time-or-off input { flex: 1; min-width: 0; }
+
+/* Trades table: date over weekday + time */
+.when { display: flex; flex-direction: column; line-height: 1.25; white-space: nowrap; }
+.when-sub { font-size: 0.85em; color: var(--text-3); }
+/* Keep the selected trade's chart and the list on one screen: the list scrolls inside its box. */
+.master-detail .table-wrap.tall { max-height: max(300px, calc(100vh - 540px)); }

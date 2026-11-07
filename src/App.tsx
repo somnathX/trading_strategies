@@ -3,14 +3,15 @@ import { buildMarket, isoToDay, type Market } from "./engine/market";
 import type { MetricKey, Summary } from "./engine/metrics";
 import type { Candles, StrategyConfig } from "./engine/types";
 import { Compare, loadRuns, saveRuns, type SavedRun } from "./ui/Compare";
+import { lotEstimate } from "./ui/analysis";
 import { DataBar } from "./ui/DataBar";
-import { inr, pct, shortDateTime } from "./ui/format";
+import { inr, pct, setCurrency, shortDateTime } from "./ui/format";
 import { Help, Toast, type ToastMsg } from "./ui/Help";
 import { BookmarkIcon, CloseIcon, HelpIcon, LogoIcon, MoonIcon, RedoIcon, SlidersIcon, SunIcon, UndoIcon } from "./ui/icons";
 import { Insights } from "./ui/Insights";
 import { Overview } from "./ui/Overview";
-import { describe, matchPreset } from "./ui/presets";
-import { intervalLabel, loadSettings, saveSettings, withDerived, type DataFile, type Settings } from "./ui/settings";
+import { describe, matchPreset, presetConfig } from "./ui/presets";
+import { intervalLabel, isUsd, loadSettings, saveSettings, sessionOf, withDerived, type DataFile, type Settings } from "./ui/settings";
 import { resample } from "./engine/market";
 import { StrategyPanel } from "./ui/StrategyPanel";
 import { Sweep, type SweepState } from "./ui/Sweep";
@@ -68,6 +69,9 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
   const [panelOpen, setPanelOpen] = useState(false); // phone layout only
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const file = files.find((f) => f.file === settings.file)!;
+  const acctKey = isUsd(file) ? "usAccount" : "account";
+  const account = settings[acctKey];
+  setCurrency(isUsd(file) ? "USD" : "INR");
   const market = useMarket(file);
   const busy = useDelayed(running, 300); // runs usually take ~10 ms: don't flash a loading state
 
@@ -75,7 +79,8 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
     const f = files.find((x) => x.file === s.file) ?? file;
     return {
       file: s.file, source: f.source ?? f.file, resample: f.resample ?? null, interval: f.interval,
-      lotSize: f.lotSize, from: s.from, to: s.to, oosFrom: s.oosEnabled ? s.oosFrom : null, cfg: s.cfg, account: s.account,
+      lotSize: f.lotSize, from: s.from, to: s.to, oosFrom: s.oosEnabled ? s.oosFrom : null, cfg: s.cfg,
+      account: isUsd(f) ? s.usAccount : s.account, session: sessionOf(f), symbol: f.symbol,
     };
   }, [files, file]);
   const spec = useMemo(() => specFor(settings), [specFor, settings]);
@@ -214,7 +219,10 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
               <>
                 <span className={`big ${s.netInr >= 0 ? "pos" : "neg"}`}>{inr(s.netInr)}</span>
                 <span className="meta">
-                  {pct(s.returnPct)} · {s.trades} trades{busy ? " · updating…" : ""}
+                  {pct(s.returnPct)} · {s.trades} trades
+                  {result?.options === "unavailable" ? " · no option prices, shown as futures"
+                    : result?.options ? ` · options${result.options.noData ? ` (${result.options.noData} without option prices skipped)` : ""}` : ""}
+                  {busy ? " · updating…" : ""}
                   {result?.dataEnd ? ` · data to ${shortDateTime(result.dataEnd)}` : ""}
                 </span>
               </>
@@ -240,8 +248,15 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
             <CloseIcon /> Show results{s ? ` · ${inr(s.netInr)}` : ""}
           </button>
         </div>
-        <StrategyPanel cfg={settings.cfg} account={settings.account} lotSize={file.lotSize} interval={file.interval}
-          onCfg={(cfg) => setSettings({ ...settings, cfg })} onAccount={(account) => setSettings({ ...settings, account })} />
+        <StrategyPanel cfg={settings.cfg} account={account} lotSize={file.lotSize} interval={file.interval} file={file}
+          onCfg={(cfg) => setSettings({ ...settings, cfg })}
+          onPreset={(p) => {
+            // Keep the instrument; only move to the preset's timeframe if this instrument has it.
+            const same = p.interval ? files.find((f) => f.symbol === file.symbol && f.interval === p.interval) : undefined;
+            setSettings({ ...settings, cfg: presetConfig(p), file: same?.file ?? settings.file });
+          }}
+          onAccount={(a) => setSettings({ ...settings, [acctKey]: a })}
+          lots={result ? lotEstimate(result.all.rows, market ? market.c.c[market.c.c.length - 1] : null, file.lotSize, account) : null} />
       </aside>
 
       <main className="main">
@@ -275,7 +290,7 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
         <div id="panel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="content" aria-busy={busy} tabIndex={-1}>
           {!result && !runError && <p className="empty">Running backtest…</p>}
           {result && tab === "overview" && (
-            <Overview result={result} prev={prevSummary} symbol={file.symbol} capital={settings.account.capital}
+            <Overview result={result} prev={prevSummary} symbol={file.symbol} capital={account.capital}
               oosFrom={settings.oosEnabled ? settings.oosFrom : null} splitDay={splitDay} />
           )}
           {result && tab === "trades" && <Trades rows={result.all.rows} market={market} focusDay={focusDay} cfg={settings.cfg} />}
@@ -353,12 +368,14 @@ function useDelayed(value: boolean, ms: number): boolean {
 function useMarket(f: DataFile): Market | null {
   const [m, setM] = useState<{ id: string; market: Market } | null>(null);
   const { file: id, source, resample: minutes } = f;
+  const session = sessionOf(f);
   useEffect(() => {
     let live = true;
     fetch(`/data/${source ?? id}`, { cache: "no-cache" })
       .then((r) => r.json() as Promise<Candles>)
-      .then((c) => live && setM({ id, market: buildMarket(minutes ? resample(c, minutes) : c) }));
+      .then((c) => live && setM({ id, market: buildMarket(minutes ? resample(c, minutes, session.open) : c, session) }));
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, source, minutes]);
   return m?.id === id ? m.market : null;
 }

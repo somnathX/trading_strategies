@@ -8,7 +8,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "fetch-data": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/fetch-data.ts"
+    "fetch-data": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/fetch-data.ts",
+    "fetch-us": "node --disable-warning=ExperimentalWarning scripts/fetch-us.ts",
+    "fetch-options": "node --disable-warning=ExperimentalWarning scripts/fetch-options.ts"
   },
   "dependencies": {
     "lightweight-charts": "^5.2.1",

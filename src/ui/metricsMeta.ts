@@ -13,7 +13,7 @@ export interface MetricMeta {
 /** Every metric the app shows, with a one-line plain-language definition. */
 export const METRICS: MetricMeta[] = [
   { key: "netInr", label: "Net P&L", fmt: (x) => inr(x), short: inrShort, better: "high",
-    explain: "Profit or loss in rupees after slippage and all charges." },
+    explain: "Profit or loss after slippage and all charges." },
   { key: "returnPct", label: "Return", fmt: (x) => pct(x), better: "high", explain: "Net P&L as a share of starting capital." },
   { key: "cagrPct", label: "CAGR", fmt: (x) => pct(x), better: "high",
     explain: "Compound annual growth rate: the yearly return that would produce the same result." },
@@ -26,7 +26,7 @@ export const METRICS: MetricMeta[] = [
   { key: "profitFactor", label: "Profit factor", fmt: (x) => num(x), better: "high",
     explain: "Gross wins divided by gross losses. Above 1 makes money; 1.5+ is solid." },
   { key: "trades", label: "Trades", fmt: (x) => String(x), better: "high", explain: "Number of trades taken." },
-  { key: "expectancyInr", label: "Net per trade", fmt: (x) => inr(x), better: "high", explain: "Average rupees made or lost per trade, after costs." },
+  { key: "expectancyInr", label: "Net per trade", fmt: (x) => inr(x), better: "high", explain: "Average money made or lost per trade, after costs." },
   { key: "avgPoints", label: "Points per trade", fmt: (x) => num(x), better: "high", explain: "Average index points per trade after slippage, before charges." },
   { key: "avgWinInr", label: "Average win", fmt: (x) => inr(x), better: "high", explain: "Average net profit of winning trades." },
   { key: "avgLossInr", label: "Average loss", fmt: (x) => inr(x), better: "high", explain: "Average net loss of losing trades." },

@@ -40,3 +40,23 @@ describe("resample to 30 minutes", () => {
     expect([r.o[0], r.c[0], r.v[0], r.v[12]]).toEqual([0, 5.5, 6, 3]);
   });
 });
+
+describe("US session", () => {
+  it("uses 09:30–16:00 for SPX: sessions, hourly bars and the opening range all start at 09:30", async () => {
+    const { buildMarket } = await import("./market");
+    const { openingRange } = await import("./signals");
+    const us = { open: 9 * 60 + 30, orbClose: 15 * 60 + 30, close: 16 * 60 };
+    const day = dayStart(isoToDay("2026-01-05"));
+    const c: Candles = { t: [], o: [], h: [], l: [], c: [], v: [] };
+    for (let k = 0; k < 80; k++) { // 09:15 .. 15:50 every 5 min (the 09:15–09:25 bars are pre-open)
+      c.t.push(day + (9 * 60 + 15 + k * 5) * 60);
+      c.o.push(k); c.h.push(k + 1); c.l.push(k - 1); c.c.push(k); c.v.push(0);
+    }
+    const m = buildMarket(c, us);
+    const full = m.fullSessions.get(isoToDay("2026-01-05"))!;
+    expect(minuteOf(c.t[full[0]])).toBe(9 * 60 + 30);
+    expect(full.length).toBe(77);
+    expect(minuteOf(resample(c, 60, us.open).t[0])).toBe(9 * 60 + 30);
+    expect(openingRange(m, m.sessions.get(isoToDay("2026-01-05")), 15)).toMatchObject({ high: 6, low: 2 }); // 09:30–09:40 bars
+  });
+});

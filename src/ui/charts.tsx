@@ -20,7 +20,7 @@ import { chartTime, ddmm, fmtDay, fmtISO, inr, num } from "./format";
 import { useChartTheme, type ChartTheme } from "./useTheme";
 
 const ts = (t: number) => chartTime(t) as UTCTimestamp;
-const RUPEES = { type: "custom" as const, minMove: 1, formatter: (x: number) => `₹${Math.round(x).toLocaleString("en-IN")}` };
+const RUPEES = { type: "custom" as const, minMove: 1, formatter: (x: number) => inr(x) };
 // Series differ by dash pattern as well as colour, so they're distinguishable without hue.
 const LINE_STYLES = [LineStyle.Solid, LineStyle.Dashed, LineStyle.Dotted, LineStyle.LargeDashed, LineStyle.SparseDotted, LineStyle.Solid];
 

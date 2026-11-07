@@ -18,6 +18,7 @@ const run = (s: Partial<Summary>, bhEnd = 550_000, split?: [Partial<Summary>, Pa
   all: evaluation(summary(s)),
   benchmark: [{ day: days[0], equity: 500_000 }, { day: days[1], equity: bhEnd }],
   dataEnd: null,
+  options: null,
   inSample: split ? evaluation(summary(split[0])) : null,
   outOfSample: split ? evaluation(summary(split[1])) : null,
   ms: 1,
@@ -87,5 +88,18 @@ describe("date format", () => {
     expect(fmtISO("2024-11-12")).toBe("12/11/2024 Tue");
     expect(fmtISO("2026-01-30", false)).toBe("30/01 Fri");
     expect(dateTime(Date.parse("2026-10-29T09:45:00+05:30") / 1000)).toBe("29/10/2026 Thu 09:45");
+  });
+});
+
+describe("lot estimate", () => {
+  it("reports lots traded, the usual stop distance and what capital allows today", async () => {
+    const { lotEstimate } = await import("./analysis");
+    const { DEFAULT_ACCOUNT } = await import("../engine/metrics");
+    const row = (lots: number, entry: number, stop: number, capped = false) =>
+      ({ lots, entryPrice: entry, stopPrice: stop, marginCapped: capped }) as unknown as import("../engine/metrics").TradeRow;
+    const e = lotEstimate([row(1, 25000, 24850), row(2, 25000, 24900), row(1, 25000, 24800, true), row(0, 25000, 24990)], 25000, 65, DEFAULT_ACCOUNT)!;
+    expect([e.median, e.min, e.max, e.capped]).toEqual([1, 1, 2, 1]);
+    expect(e.stopPts).toBe(150); // median of 100, 150, 200 (the 0-lot row is ignored)
+    expect(e.maxNow).toBe(2); // ₹5L / (25,000 × 65 × 12%) = 2.56
   });
 });
