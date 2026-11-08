@@ -55,6 +55,20 @@ describe("OptionPricer", () => {
     expect(leg.pnl).toBeGreaterThan(0);
   });
 
+  it("sells the at-the-money put for a long, and gains as the index rises", () => {
+    const leg = new OptionPricer(chain, m, { itmStrikes: 0, minDte: 7, sell: true }).leg(trade({}))!;
+    expect([leg.type, leg.strike, leg.sell]).toEqual(["PE", 25000, true]);
+    expect(leg.pnl).toBeGreaterThan(0.3 * 200); // short a ~-0.45 delta put, index +200
+    expect(leg.exit).toBeCloseTo(leg.entry - leg.pnl, 6); // bought back cheaper
+    expect(leg.stop).toBeCloseTo(leg.entry + leg.delta * 100, 6); // premium rises if the index falls to the stop
+  });
+
+  it("sells the call 2 strikes out of the money for a short", () => {
+    const leg = new OptionPricer(chain, m, { itmStrikes: 2, minDte: 7, sell: true }).leg(trade({ side: "short", exitPrice: 25200, pnlPoints: -200, stopPrice: 25100 }))!;
+    expect([leg.type, leg.strike]).toEqual(["CE", 25100]);
+    expect(leg.pnl).toBeLessThan(0); // index rose against the short call
+  });
+
   it("returns null when there's no previous day's option data", () => {
     const first = trade({ entryTime: dayStart(isoToDay(d1)) + 10 * 3600 });
     expect(new OptionPricer(chain, m, { itmStrikes: 6, minDte: 7 }).leg(first)).toBeNull();

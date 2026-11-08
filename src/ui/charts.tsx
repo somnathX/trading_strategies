@@ -196,8 +196,14 @@ export function TradeChart({ market, trade, dayTrades, trend, height = 420 }: {
       const bars = market.dates
         .filter((d) => d >= firstDay && d <= exitDay)
         .flatMap((d) => (isTrend ? market.fullSessions : market.sessions).get(d) ?? []);
+      const sold = trade.option?.legs?.filter((l) => l.qty < 0) ?? []; // option selling: show the range between the sold strikes
       const candles = chart.addSeries(CandlestickSeries, {
         upColor: th.up, downColor: th.down, borderVisible: false, wickUpColor: th.up, wickDownColor: th.down, priceLineVisible: false,
+        ...(sold.length && { autoscaleInfoProvider: (base: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
+          const r = base();
+          const ks = sold.map((l) => l.strike);
+          return r && { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...ks), maxValue: Math.max(r.priceRange.maxValue, ...ks) } };
+        } }),
       });
       candles.setData(bars.map((i) => ({ time: ts(c.t[i]), open: c.o[i], high: c.h[i], low: c.l[i], close: c.c[i] })));
 
@@ -206,7 +212,8 @@ export function TradeChart({ market, trade, dayTrades, trend, height = 420 }: {
       line(trade.orbHigh, "OR high", th.muted, LineStyle.Solid);
       line(trade.orbLow, "OR low", th.muted, LineStyle.Solid);
       line(trade.entryPrice, "entry", th.accent, LineStyle.Solid);
-      line(trade.stopPrice, isTrend ? "ST at entry" : "stop", th.down);
+      if (sold.length) sold.forEach((l) => line(l.strike, `sold ${l.type === "CE" ? "call" : "put"}`, th.down));
+      else line(trade.stopPrice, isTrend ? "ST at entry" : "stop", th.down);
       if (isTrend) {
         const { series: s, pos } = trend!;
         const at = (i: number) => pos.get(i);

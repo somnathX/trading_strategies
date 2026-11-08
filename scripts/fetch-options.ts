@@ -5,6 +5,7 @@
  *
  * Writes public/data/options/{SYMBOL}.json: for each trading day, the index close and the two nearest
  * monthly expiries' CE/PE closes on a strike grid within ±12% of the index.
+ * Also writes {SYMBOL}_weekly.json: the three nearest expiries of any kind (weeklies), within ±10%.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -62,6 +63,8 @@ async function rowsFor(day: string): Promise<Row[] | null> {
     }
   } else if (res.status !== 404) {
     throw new Error(`${day}: HTTP ${res.status}`);
+  } else if (day >= iso(new Date(Date.now() - 3 * 86400_000))) {
+    return null; // today's file may just not be published yet: don't cache the miss
   }
   writeFileSync(cached, JSON.stringify(rows));
   return rows;
@@ -97,7 +100,9 @@ async function main() {
 
   for (const [symbol, step] of Object.entries(SYMBOLS)) {
     const spot = closes(symbol);
-    const out: { d: string; s: number; e: { x: string; k0: number; ce: (number | null)[]; pe: (number | null)[] }[] }[] = [];
+    type Day = { d: string; s: number; e: { x: string; k0: number; ce: (number | null)[]; pe: (number | null)[] }[] };
+    const out: Day[] = [];
+    const weekly: Day[] = [];
     for (const [day, rows] of all) {
       const s = spot.get(day);
       if (!s) continue;
@@ -105,24 +110,31 @@ async function main() {
       // Monthly expiry = the last listed expiry in its calendar month.
       const expiries = [...new Set(mine.map((r) => r[1]))].sort();
       const monthly = expiries.filter((x, i) => expiries[i + 1]?.slice(0, 7) !== x.slice(0, 7)).slice(0, 2);
-      const k0 = Math.ceil((s * (1 - BAND)) / step) * step;
-      const n = Math.floor((s * (1 + BAND) - k0) / step) + 1;
-      const e = monthly.map((x) => {
-        const ce: (number | null)[] = Array(n).fill(null);
-        const pe: (number | null)[] = Array(n).fill(null);
-        for (const r of mine) {
-          if (r[1] !== x) continue;
-          const j = (r[2] - k0) / step;
-          if (j >= 0 && j < n && Number.isInteger(j)) (r[3] === "CE" ? ce : pe)[j] = r[4];
-        }
-        return { x, k0, ce, pe };
-      });
-      out.push({ d: day, s, e });
+      out.push({ d: day, s, e: grid(mine, monthly, s, step, BAND) });
+      weekly.push({ d: day, s, e: grid(mine, expiries.slice(0, 3), s, step, 0.1) });
     }
-    out.sort((a, b) => a.d.localeCompare(b.d));
-    writeFileSync(join(OUT, `${symbol}.json`), JSON.stringify({ symbol, step, days: out }));
-    console.log(`${symbol}: ${out.length} days, ${out[0]?.d} → ${out[out.length - 1]?.d}`);
+    for (const [file, days] of [[`${symbol}.json`, out], [`${symbol}_weekly.json`, weekly]] as const) {
+      days.sort((a, b) => a.d.localeCompare(b.d));
+      writeFileSync(join(OUT, file), JSON.stringify({ symbol, step, days }));
+      console.log(`${file}: ${days.length} days, ${days[0]?.d} → ${days[days.length - 1]?.d}`);
+    }
   }
+}
+
+/** CE/PE closes for these expiries on a strike grid within ±band of the index. */
+function grid(mine: Row[], expiries: string[], s: number, step: number, band: number) {
+  const k0 = Math.ceil((s * (1 - band)) / step) * step;
+  const n = Math.floor((s * (1 + band) - k0) / step) + 1;
+  return expiries.map((x) => {
+    const ce: (number | null)[] = Array(n).fill(null);
+    const pe: (number | null)[] = Array(n).fill(null);
+    for (const r of mine) {
+      if (r[1] !== x) continue;
+      const j = (r[2] - k0) / step;
+      if (j >= 0 && j < n && Number.isInteger(j)) (r[3] === "CE" ? ce : pe)[j] = r[4];
+    }
+    return { x, k0, ce, pe };
+  });
 }
 
 main().catch((e) => { console.error(e instanceof Error ? e.message : e); process.exitCode = 1; });

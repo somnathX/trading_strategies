@@ -1,17 +1,17 @@
 import { useState } from "react";
 import type { MetricKey } from "../engine/metrics";
-import type { StrategyConfig } from "../engine/types";
+import type { StrategyConfig, StrategyKind } from "../engine/types";
 import type { SweepAxis, SweepCell } from "../worker";
 import { heatStyle, METRICS } from "./metricsMeta";
 
 /** Settings worth sweeping, with sensible starting values (editable in the UI). */
-const SWEEPABLE: { key: keyof StrategyConfig; label: string; values: string; trend?: boolean }[] = [
-  { key: "maFast", label: "Fast average", values: "5, 10, 15, 20, 30", trend: true },
-  { key: "maSlow", label: "Slow average", values: "30, 50, 100, 200", trend: true },
-  { key: "stPeriod", label: "SuperTrend ATR period", values: "7, 10, 14, 20", trend: true },
-  { key: "stMultiplier", label: "SuperTrend multiplier", values: "1.5, 2, 2.5, 3, 4", trend: true },
-  { key: "maType", label: "Average type", values: "ema, sma", trend: true },
-  { key: "trendCloseEod", label: "Close at day end", values: "false, true", trend: true },
+const SWEEPABLE: { key: keyof StrategyConfig; label: string; values: string; kind?: StrategyKind }[] = [ // no kind = opening range
+  { key: "maFast", label: "Fast average", values: "5, 10, 15, 20, 30", kind: "ma_supertrend" },
+  { key: "maSlow", label: "Slow average", values: "30, 50, 100, 200", kind: "ma_supertrend" },
+  { key: "stPeriod", label: "SuperTrend ATR period", values: "7, 10, 14, 20", kind: "ma_supertrend" },
+  { key: "stMultiplier", label: "SuperTrend multiplier", values: "1.5, 2, 2.5, 3, 4", kind: "ma_supertrend" },
+  { key: "maType", label: "Average type", values: "ema, sma", kind: "ma_supertrend" },
+  { key: "trendCloseEod", label: "Close at day end", values: "false, true", kind: "ma_supertrend" },
   { key: "orbMinutes", label: "Opening range (min)", values: "15, 30, 45, 60" },
   { key: "stopLevel", label: "Stop / trail × OR", values: "0.382, 0.5, 0.618, 0.786, 1" },
   { key: "maxTradesPerDay", label: "Max trades / day", values: "1, 2, 3" },
@@ -27,6 +27,14 @@ const SWEEPABLE: { key: keyof StrategyConfig; label: string; values: string; tre
   { key: "stopMode", label: "Stop type", values: "fixed, trail" },
   { key: "useVwapFilter", label: "VWAP filter", values: "false, true" },
   { key: "requireStrongCandle", label: "Strong candle", values: "false, true" },
+  { key: "sellWidth", label: "Strikes away (moves)", values: "0, 0.5, 0.75, 1, 1.5", kind: "option_sell" },
+  { key: "sellStructure", label: "Structure", values: "double_calendar, strangle, iron_condor", kind: "option_sell" },
+  { key: "sellWing", label: "Condor hedge (moves)", values: "0.25, 0.5, 1", kind: "option_sell" },
+  { key: "ivMin", label: "IV at least (%)", values: "0, 10, 12, 14", kind: "option_sell" },
+  { key: "ivMax", label: "IV at most (%)", values: "0, 14, 16, 18, 22", kind: "option_sell" },
+  { key: "exitDaysBefore", label: "Exit days before expiry", values: "1, 2, 3", kind: "option_sell" },
+  { key: "targetPct", label: "Profit target %", values: "0, 25, 50, 75", kind: "option_sell" },
+  { key: "stopPct", label: "Stop loss %", values: "0, 40, 100, 200", kind: "option_sell" },
   { key: "slippagePoints", label: "Entry slippage", values: "0, 1, 2, 3" },
 ];
 
@@ -55,15 +63,15 @@ export function Sweep({ state, cfg, hasOos, onRun, onApply }: {
   onRun: (x: SweepAxis, y: SweepAxis, metric: MetricKey) => void;
   onApply: (patch: Partial<StrategyConfig>) => void;
 }) {
-  // Only settings that matter for the current strategy (entry slippage matters for both).
-  const trend = cfg.strategy === "ma_supertrend";
-  const options = SWEEPABLE.filter((s) => s.key === "slippagePoints" || Boolean(s.trend) === trend);
+  // Only settings that matter for the current strategy (entry slippage matters for all).
+  const options = SWEEPABLE.filter((s) => s.key === "slippagePoints" || (s.kind ?? "orb") === cfg.strategy);
+  const [x0, y0] = ({ orb: ["orbMinutes", "stopLevel"], ma_supertrend: ["maFast", "maSlow"], option_sell: ["sellWidth", "stopPct"] } as const)[cfg.strategy];
   const shown = state;
   if (shown && !(options.some((o) => o.key === shown.x.key) && options.some((o) => o.key === shown.y.key))) {
     state = null; // results from the other strategy
   }
-  const [xKey, setXKey] = useState<keyof StrategyConfig>(state?.x.key ?? (trend ? "maFast" : "orbMinutes"));
-  const [yKey, setYKey] = useState<keyof StrategyConfig>(state?.y.key ?? (trend ? "maSlow" : "stopLevel"));
+  const [xKey, setXKey] = useState<keyof StrategyConfig>(state?.x.key ?? x0);
+  const [yKey, setYKey] = useState<keyof StrategyConfig>(state?.y.key ?? y0);
   const [xVals, setXVals] = useState(SWEEPABLE.find((s) => s.key === xKey)!.values);
   const [yVals, setYVals] = useState(SWEEPABLE.find((s) => s.key === yKey)!.values);
   const [metric, setMetric] = useState<MetricKey>(state?.metric ?? "sharpe");

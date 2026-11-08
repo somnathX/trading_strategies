@@ -11,7 +11,8 @@ export interface Candles {
   v: number[];
 }
 
-export type StrategyKind = "orb" | "ma_supertrend";
+export type StrategyKind = "orb" | "ma_supertrend" | "option_sell";
+export type SellStructure = "double_calendar" | "strangle" | "iron_condor";
 
 export interface StrategyConfig {
   strategy: StrategyKind;
@@ -23,6 +24,15 @@ export interface StrategyConfig {
   stMultiplier: number; // SuperTrend ATR multiple
   trendCloseEod: boolean; // flatten at the session close instead of holding overnight
   trendLastEntry: string | null; // "HH:MM": no new MA-cross entries on candles starting at/after this time
+  // --- Option selling (weekly, from daily option closes) ---
+  sellStructure: SellStructure;
+  sellWidth: number; // call and put strikes this many expected weekly moves from the index (0 = at the money)
+  sellWing: number; // iron condor: hedges this many expected moves beyond the sold strikes
+  ivMin: number; // % at-the-money IV (≈ India VIX) needed to enter; 0 = no floor
+  ivMax: number; // % above which the week is skipped; 0 = no cap
+  exitDaysBefore: number; // trading days before the weekly expiry to close
+  targetPct: number; // close when the profit reaches this % of the premium paid / received (0 = off)
+  stopPct: number; // close when the loss reaches this % of the premium (0 = off)
   // --- Opening range breakout ---
   orbMinutes: number; // 15 | 30 | 45 | 60
   entryMode: "breakout" | "fib_pullback";
@@ -59,6 +69,14 @@ export const DEFAULT_CONFIG: StrategyConfig = {
   stMultiplier: 3,
   trendCloseEod: false,
   trendLastEntry: null,
+  sellStructure: "double_calendar",
+  sellWidth: 1,
+  sellWing: 0.5,
+  ivMin: 10,
+  ivMax: 18,
+  exitDaysBefore: 1,
+  targetPct: 25,
+  stopPct: 40,
   orbMinutes: 15,
   entryMode: "breakout",
   fibEntryLevel: 0.5,
@@ -110,7 +128,7 @@ export interface Trade {
   outcome: string; // e.g. "tp1+tp2+eod", "stop", "gap_stop"
   orbHigh: number | null; // opening-range trades only
   orbLow: number | null;
-  entryStyle: "breakout" | "fib_pullback" | "ma_cross";
+  entryStyle: "breakout" | "fib_pullback" | "ma_cross" | "option_sell";
   stopPrice: number; // initial stop (SuperTrend level at entry for MA-cross trades)
   tp: Triple<number | null>;
   holdDays: number;

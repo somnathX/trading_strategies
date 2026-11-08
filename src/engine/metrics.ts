@@ -16,8 +16,9 @@ export interface AccountConfig {
   stampBuyPct: number; // % of buy turnover
   gstPct: number; // on brokerage + exchange + SEBI fees
   feePerLot?: number; // flat commission + exchange fees per contract per side (US futures style)
-  vehicle?: "futures" | "options"; // options: buy an in-the-money call (long) or put (short)
+  vehicle?: "futures" | "options" | "sell"; // options: buy an in-the-money call (long) or put (short); sell: write a put (long) or call (short)
   itmStrikes?: number; // options: strikes in the money
+  otmStrikes?: number; // sell: strikes out of the money (0 = at the money)
   minDte?: number; // options: calendar days to expiry needed, else next month
 }
 
@@ -123,24 +124,29 @@ export function maxLotsByMargin(price: number, lotSize: number, a: AccountConfig
 }
 
 export function sizeAndCost(t: Trade, lotSize: number, a: AccountConfig): TradeRow {
-  // With options, everything below is in premium: you always buy first and sell later (calls and puts alike).
+  // With options, everything below is in premium: bought options are long the premium, sold ones short it.
   const o = t.option;
   const entry = o ? o.entry : t.entryPrice;
-  const stopPts = o ? o.entry - o.stop : Math.abs(t.entryPrice - t.stopPrice);
+  const stopPts = o ? Math.abs(o.entry - o.stop) : Math.abs(t.entryPrice - t.stopPrice);
   const wantedLots =
     a.sizing === "fixed" || stopPts <= 0
       ? Math.max(1, Math.floor(a.fixedLots))
       : Math.max(1, Math.floor((a.capital * a.riskPct) / 100 / (stopPts * lotSize)));
   // A very tight stop would otherwise ask for more lots than the capital could ever margin.
-  const lots = Math.min(wantedLots, maxLotsByMargin(entry, lotSize, a));
+  // A sold option blocks margin on the index like a future; a bought one costs its premium; spreads say what they block.
+  const lots = Math.min(wantedLots, o?.margin
+    ? maxLotsByMargin(o.margin, lotSize, { ...a, marginPct: 100 })
+    : maxLotsByMargin(o?.sell ? t.entryPrice : entry, lotSize, a));
   const qty = lots * lotSize;
-  const long = o ? true : t.side === "long";
-  const exitPrice = o ? o.exit - a.exitSlippagePoints : long ? t.exitPrice - a.exitSlippagePoints : t.exitPrice + a.exitSlippagePoints;
-  const [buy, sell] = long ? [entry * qty, exitPrice * qty] : [exitPrice * qty, entry * qty];
+  const long = o ? !o.sell : t.side === "long";
+  const exitPrice = (o ? o.exit : t.exitPrice) + (long ? -a.exitSlippagePoints : a.exitSlippagePoints);
+  const [buy, sell] = o?.turnover ? [o.turnover.buy * qty, o.turnover.sell * qty]
+    : long ? [entry * qty, exitPrice * qty] : [exitPrice * qty, entry * qty];
   // Brokerage: per executed order, the lower of the flat fee and a % of that order's value.
   const fills = t.outcome.split("+").length + (o ? 2 * o.rolls : 0); // exit orders (partial exits and option rolls count separately)
   const perOrder = (value: number) => Math.min(a.brokeragePerOrder, (value * (a.brokeragePct ?? 100)) / 100);
-  const brokerage = qty === 0 ? 0 : perOrder(entry * qty) + fills * perOrder((exitPrice * qty) / fills);
+  const legs = o?.legs?.length ?? 1; // each option leg is its own order
+  const brokerage = qty === 0 ? 0 : legs * (perOrder(entry * qty) + fills * perOrder((exitPrice * qty) / fills));
   const exchange = ((buy + sell) * a.exchangePct) / 100;
   const sebi = ((buy + sell) * a.sebiPerCrore) / 1e7;
   const charges = brokerage + exchange + sebi + (sell * a.sttSellPct) / 100 + (buy * a.stampBuyPct) / 100

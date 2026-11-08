@@ -39,20 +39,25 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
   const riskInr = (account.capital * account.riskPct) / 100;
   const usd = isUsd(file);
   const hours = sessionOf(file);
-  const opt = !usd && account.vehicle === "options";
+  const selling = cfg.strategy === "option_sell"; // the weekly option-selling strategy (not the "Sell options" vehicle)
+  const opt = !usd && !selling && account.vehicle === "options";
+  const sell = !usd && !selling && account.vehicle === "sell";
+  const otm = account.otmStrikes ?? 0;
   const step = OPTION_STEP[file.symbol]; // strike interval, for symbols with option data
   const itm = account.itmStrikes ?? 6;
   const lotWord = usd ? `${file.contract ?? "contract"}` : `lot of ${lotSize}`;
   const presets = presetsFor(cfg.strategy);
-  const n0 = trend ? 3 : 6; // steps before the shared sizing / charges steps
+  const n0 = trend || selling ? 3 : 6; // steps before the shared sizing / charges steps
 
   return (
     <div className="panel">
       <div className="panel-head">
-        <Segmented label="Strategy" value={cfg.strategy} onChange={(v) => set({ strategy: v })}
+        <Segmented label="Strategy" value={cfg.strategy}
+          onChange={(v) => set({ strategy: v, ...(v === "option_sell" && { slippagePoints: 0.5 }) })} // per leg; the presets assume it
           options={[
             { value: "orb", label: "Range breakout", hint: "Opening range breakout, intraday" },
             { value: "ma_supertrend", label: "MA + SuperTrend", hint: "Moving-average cross, SuperTrend exit" },
+            { value: "option_sell", label: "Option selling", hint: "Weekly calendars, strangles, condors" },
           ]} />
         <label className="field">
           <span className="label">Start from</span>
@@ -76,7 +81,8 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
         </label>
       </div>
 
-      {trend ? <TrendSteps cfg={cfg} set={set} open={hhmm(hours.open)} close={hhmm(hours.close)} /> : <>
+      {trend ? <TrendSteps cfg={cfg} set={set} open={hhmm(hours.open)} close={hhmm(hours.close)} />
+        : selling ? <SellSteps cfg={cfg} set={set} symbol={file.symbol} hasData={!usd && !!step} /> : <>
       <Step n={1} title="Opening range" text={`The high and low of the first ${cfg.orbMinutes} minutes after ${hhmm(hours.open)}. Price leaving this range is the signal.`}>
         <Segmented label="Range length" hideLabel value={cfg.orbMinutes}
           options={[15, 30, 45, 60].map((m) => ({ value: m, label: `${m} min` }))} onChange={(v) => set({ orbMinutes: v })} />
@@ -179,15 +185,33 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
 
       </>}
 
-      <Step n={n0 + 1} title="Position size" text={opt
+      <Step n={n0 + 1} title="Position size" text={selling
+        ? `${account.sizing === "risk"
+          ? `Lots chosen so hitting the stop (or the most the position can lose, with no stop) costs about ${cur()}${group(riskInr)}`
+          : `${account.fixedLots} lot${account.fixedLots > 1 ? "s" : ""} of ${lotSize} on every leg`}, if the capital covers the margin: ${account.marginPct}% of the index per lot for a naked strangle, about 2.5% for hedged structures.`
+        : sell
+        ? `Sells a monthly ${otm ? `${otm}-strike out-of-the-money` : "at-the-money"} put for longs and call for shorts${step && otm ? ` (≈${otm * step} pts on ${file.symbol})` : ""}, bought back on the exit signal and rolled at expiry. You keep the premium if the index doesn't go against you; losses are open-ended. ${account.sizing === "risk"
+          ? `Sized so the option gains about ${cur()}${group(riskInr)} in value if the index hits the stop, capped by ${account.marginPct}% margin on the index per lot.`
+          : `${account.fixedLots} lot${account.fixedLots > 1 ? "s" : ""} of ${lotSize} every trade, if the capital covers ${account.marginPct}% margin per lot.`}`
+        : opt
         ? `Buys a monthly ${itm}-strike in-the-money call for longs and put for shorts${step ? ` (≈${itm * step} pts on ${file.symbol})` : ""}, rolled at expiry. ${account.sizing === "risk"
           ? `Sized so the option loses about ${cur()}${group(riskInr)} if the index hits the stop, and never more premium than the capital.`
           : `${account.fixedLots} lot${account.fixedLots > 1 ? "s" : ""} of ${lotSize} every trade, if the capital covers the premium.`}`
         : account.sizing === "risk"
         ? `Risk about ${cur()}${group(riskInr)} per trade (entry to ${trend ? "the SuperTrend line" : "stop"}), at least 1 ${lotWord}, and never more than the capital can margin at ${account.marginPct}% per ${usd ? "contract" : "lot"}.`
         : `${account.fixedLots} × ${lotWord} on every trade, if the capital can margin them at ${account.marginPct}% each.`}>
-        {!usd && <Segmented label="Trade with" value={account.vehicle ?? "futures"} onChange={(v) => setAcc({ vehicle: v })}
-          options={[{ value: "futures", label: "Futures" }, { value: "options", label: "Options (ITM)" }]} />}
+        {!usd && !selling && <Segmented label="Trade with" value={account.vehicle ?? "futures"} onChange={(v) => setAcc({ vehicle: v })}
+          options={[{ value: "futures", label: "Futures" }, { value: "options", label: "Buy options" }, { value: "sell", label: "Sell options" }]} />}
+        {sell && (step
+          ? <div className="row2">
+              <Field label="Out of the money" hint={otm ? `${otm} × ${step} = ${otm * step} pts` : "At the money"}>
+                <Num value={otm} min={0} max={15} step={1} suffix="strikes" onChange={(v) => setAcc({ otmStrikes: Math.round(v) })} />
+              </Field>
+              <Field label="Min days to expiry" info="Uses the nearest monthly expiry with at least this many calendar days left; otherwise the next month.">
+                <Num value={account.minDte ?? 7} min={0} max={25} step={1} suffix="days" onChange={(v) => setAcc({ minDte: Math.round(v) })} />
+              </Field>
+            </div>
+          : <p className="field-warn" role="status">Option prices are only available for NIFTY and BANKNIFTY. {file.symbol} runs as futures.</p>)}
         {opt && (step
           ? <div className="row2">
               <Field label="In the money" hint={`${itm} × ${step} = ${itm * step} pts`}>
@@ -210,14 +234,16 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
               </Field>
             </>
           : <Field label={usd ? "Contracts" : "Lots"}><Num value={account.fixedLots} min={1} step={1} onChange={(v) => setAcc({ fixedLots: v })} /></Field>}
-        {!(opt && step) && <Field label={usd ? "Margin per contract" : "Margin per lot"} info={usd ? "Initial margin per futures contract, as % of its value (index × $ per point). MES and ES are roughly 6–9%. Positions are capped at what the capital can cover." : "Margin your broker blocks per futures lot, as % of the contract value (price × lot size). Nifty is roughly 10–13%. Positions are capped at what the capital can cover."}>
+        {!(opt && step) && <Field label={usd ? "Margin per contract" : "Margin per lot"} info={usd ? "Initial margin per futures contract, as % of its value (index × $ per point). MES and ES are roughly 6–9%. Positions are capped at what the capital can cover." : sell ? "Margin your broker blocks per sold option lot, as % of the index value (index × lot size). A naked Nifty option is roughly 10–13%, like a future. Positions are capped at what the capital can cover." : "Margin your broker blocks per futures lot, as % of the contract value (price × lot size). Nifty is roughly 10–13%. Positions are capped at what the capital can cover."}>
           <Num value={account.marginPct} min={1} max={100} step={0.5} suffix="%" onChange={(v) => setAcc({ marginPct: v })} />
         </Field>}
         {lots && <LotsNote lots={lots} lotSize={lotSize} capital={account.capital} unit={usd ? "contract" : "lot"} premium={opt && !!step} />}
       </Step>
 
-      <Step n={n0 + 2} title="Execution & charges" text={opt && step
-        ? `Option-buying charges (Zerodha): ₹20 per order, STT 0.15% of the sell premium, NSE 0.03503%, stamp 0.003% on buys, GST 18%. ${account.exitSlippagePoints} pt premium slippage on exit.`
+      <Step n={n0 + 2} title="Execution & charges" text={selling
+        ? `Option charges (Zerodha): ₹20 per order on every leg, STT 0.15% of the sell premium, NSE 0.03503%, stamp 0.003% on buys, GST 18%. ${cfg.slippagePoints} pt slippage per leg on the way in and out.`
+        : (opt || sell) && step
+        ? `Option charges (Zerodha): ₹20 per order, STT 0.15% of the sell premium, NSE 0.03503%, stamp 0.003% on buys, GST 18%. ${account.exitSlippagePoints} pt premium slippage on exit.`
         : usd
         ? `${cfg.slippagePoints + account.exitSlippagePoints} pts slippage per round trip, $${account.feePerLot ?? 0} per contract per side in fees.`
         : `${cfg.slippagePoints + account.exitSlippagePoints} pts slippage per round trip, STT ${account.sttSellPct}% on the sell side, ₹${account.brokeragePerOrder} per order.`}>
@@ -227,7 +253,7 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
             <Field label="Exit slippage"><Num value={account.exitSlippagePoints} min={0} step={0.5} suffix="pts" onChange={(v) => setAcc({ exitSlippagePoints: v })} /></Field>
             {usd ? <Field label="Fees / contract / side" info="Commission plus exchange and regulatory fees for one contract, one side. MES at IBKR is about $0.62; ES about $2.25.">
               <Num value={account.feePerLot ?? 0} min={0} step={0.1} suffix="$" onChange={(v) => setAcc({ feePerLot: v })} />
-            </Field> : opt && step ? null : <>
+            </Field> : (opt || sell || selling) && step ? null : <>
             <Field label="Brokerage / order"><Num value={account.brokeragePerOrder} min={0} step={5} suffix="₹" onChange={(v) => setAcc({ brokeragePerOrder: v })} /></Field>
             <Field label="STT, sell side" info="Securities Transaction Tax. Futures: 0.05% of the sell value since 1 April 2026 (0.02% before).">
               <Num value={account.sttSellPct} min={0} step={0.005} suffix="%" onChange={(v) => setAcc({ sttSellPct: v })} />
@@ -248,6 +274,60 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
         </button>
       </div>
     </div>
+  );
+}
+
+const STRUCTURES = {
+  double_calendar: "Sell this week's call and put, buy the same strikes in next week's expiry. Pays a debit; earns as this week's options decay faster than next week's, and gains if volatility rises. Loses on a big move either way.",
+  strangle: "Sell this week's call and put with no hedge. Collects the most premium; the loss is open-ended if the index runs past a strike.",
+  iron_condor: "Sell this week's call and put, and buy cheaper ones further out in the same week. Collects less, but the loss is capped at the gap between strikes minus the credit.",
+} as const;
+
+/** Steps for the weekly option-selling strategy. */
+function SellSteps({ cfg, set, symbol, hasData }: { cfg: StrategyConfig; set: (p: Partial<StrategyConfig>) => void; symbol: string; hasData: boolean }) {
+  const off = (v: number) => (v > 0 ? v : 0);
+  return (
+    <>
+      {!hasData && <p className="field-warn" role="status">Weekly option prices are only available for NIFTY and BANKNIFTY. Pick one of them to run this strategy; {symbol} has no trades.</p>}
+      <Step n={1} title="What to sell" text={`${STRUCTURES[cfg.sellStructure]} Strikes sit ${cfg.sellWidth ? `${cfg.sellWidth} expected weekly move${cfg.sellWidth === 1 ? "" : "s"}` : "at the money, 0 moves"} from the index, where one move = index × at-the-money IV × √(time to expiry).`}>
+        <Segmented label="Structure" hideLabel value={cfg.sellStructure} onChange={(v) => set({ sellStructure: v })}
+          options={[
+            { value: "double_calendar", label: "Calendar", hint: "Double calendar: sell this week, buy next week" },
+            { value: "strangle", label: "Strangle", hint: "Sell a call and a put, unhedged" },
+            { value: "iron_condor", label: "Iron condor", hint: "Strangle with hedges further out" },
+          ]} />
+        <div className="row2">
+          <Field label="Strikes away from the index" info="In expected weekly moves. At VIX 13 with 5 days left, one move on Nifty is about 2%, roughly 450 points.">
+            <Num value={cfg.sellWidth} min={0} max={3} step={0.25} suffix="moves" onChange={(v) => set({ sellWidth: Math.max(0, v) })} />
+          </Field>
+          {cfg.sellStructure === "iron_condor" && (
+            <Field label="Hedges further out" info="How far beyond each sold strike the bought hedge sits, in expected moves (at least one strike).">
+              <Num value={cfg.sellWing} min={0} max={3} step={0.25} suffix="moves" onChange={(v) => set({ sellWing: Math.max(0, v) })} />
+            </Field>
+          )}
+        </div>
+      </Step>
+
+      <Step n={2} title="When to enter" text={`At the close of the first trading day after each weekly expiry${cfg.ivMin || cfg.ivMax
+        ? `, only when at-the-money IV (close to India VIX) is ${cfg.ivMin && cfg.ivMax ? `between ${cfg.ivMin}% and ${cfg.ivMax}%` : cfg.ivMin ? `at least ${cfg.ivMin}%` : `at most ${cfg.ivMax}%`}. Other weeks are skipped.`
+        : ", every week."}`}>
+        <div className="row2">
+          <Field label="IV at least" hint={cfg.ivMin ? undefined : "Off"}><Num value={cfg.ivMin} min={0} max={60} step={1} suffix="%" onChange={(v) => set({ ivMin: off(v) })} /></Field>
+          <Field label="IV at most" hint={cfg.ivMax ? undefined : "Off"}><Num value={cfg.ivMax} min={0} max={60} step={1} suffix="%" onChange={(v) => set({ ivMax: off(v) })} /></Field>
+        </div>
+      </Step>
+
+      <Step n={3} title="Exit" text={`Closed at the close ${cfg.exitDaysBefore} trading day${cfg.exitDaysBefore > 1 ? "s" : ""} before expiry${cfg.targetPct || cfg.stopPct
+        ? `, or earlier at the first daily close with ${[cfg.targetPct && `a profit of ${cfg.targetPct}%`, cfg.stopPct && `a loss of ${cfg.stopPct}%`].filter(Boolean).join(" or ")} of the premium ${cfg.sellStructure === "double_calendar" ? "paid" : "received"}`
+        : ""}. Prices are daily closes, so stops are checked once a day.`}>
+        <Segmented label="Days before expiry" value={cfg.exitDaysBefore} onChange={(v) => set({ exitDaysBefore: v })}
+          options={[1, 2, 3].map((n) => ({ value: n, label: `${n} day${n > 1 ? "s" : ""}` }))} />
+        <div className="row2">
+          <Field label="Profit target" hint={cfg.targetPct ? undefined : "Off"}><Num value={cfg.targetPct} min={0} max={500} step={5} suffix="%" onChange={(v) => set({ targetPct: off(v) })} /></Field>
+          <Field label="Stop loss" hint={cfg.stopPct ? undefined : "Off"}><Num value={cfg.stopPct} min={0} max={500} step={10} suffix="%" onChange={(v) => set({ stopPct: off(v) })} /></Field>
+        </div>
+      </Step>
+    </>
   );
 }
 

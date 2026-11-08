@@ -3,7 +3,8 @@ import { runBacktest } from "./engine/backtest";
 import { buildMarket, dayOf, isoToDay, NSE, resample, sliceCandles, type Market, type Session } from "./engine/market";
 import { evaluate, OPTION_CHARGES, type AccountConfig, type Evaluation, type Summary } from "./engine/metrics";
 import { OptionPricer, type OptionChain } from "./engine/options";
-import type { Candles, StrategyConfig } from "./engine/types";
+import { runOptionSell } from "./engine/optionSell";
+import type { Candles, StrategyConfig, Trade } from "./engine/types";
 
 export interface RunSpec {
   file: string; // data-set id, e.g. NIFTY_60m.json
@@ -104,16 +105,27 @@ async function market(spec: RunSpec): Promise<Market> {
 function run(m: Market, spec: RunSpec, cfg: StrategyConfig, chain: OptionChain | null): RunResult {
   const start = performance.now();
   const fromDay = isoToDay(spec.from);
-  let trades = runBacktest(m, cfg, fromDay);
+  let trades: Trade[];
   let options: RunResult["options"] = null;
-  if (spec.account.vehicle === "options") {
-    if (!chain) options = "unavailable";
-    else {
-      const pricer = new OptionPricer(chain, m, { itmStrikes: spec.account.itmStrikes ?? 6, minDte: spec.account.minDte ?? 7 });
-      const priced = trades.map((t) => ({ ...t, option: pricer.leg(t) ?? undefined }));
-      trades = priced.filter((t) => t.option);
-      options = { priced: trades.length, noData: priced.length - trades.length };
-      spec = { ...spec, account: { ...spec.account, ...OPTION_CHARGES } };
+  const sell = spec.account.vehicle === "sell";
+  if (cfg.strategy === "option_sell") { // trades straight from weekly option closes; slippage is per leg, in the trades
+    trades = chain ? runOptionSell(chain, cfg, fromDay, isoToDay(spec.to)) : [];
+    options = chain ? { priced: trades.length, noData: 0 } : "unavailable";
+    spec = { ...spec, account: { ...spec.account, ...OPTION_CHARGES, marginPct: spec.account.marginPct, exitSlippagePoints: 0 } };
+  } else {
+    trades = runBacktest(m, cfg, fromDay);
+    if (spec.account.vehicle === "options" || sell) {
+      if (!chain) options = "unavailable";
+      else {
+        const pricer = new OptionPricer(chain, m, {
+          itmStrikes: sell ? spec.account.otmStrikes ?? 0 : spec.account.itmStrikes ?? 6, minDte: spec.account.minDte ?? 7, sell,
+        });
+        const priced = trades.map((t) => ({ ...t, option: pricer.leg(t) ?? undefined }));
+        trades = priced.filter((t) => t.option);
+        options = { priced: trades.length, noData: priced.length - trades.length };
+        // Sellers keep the futures-style margin % (SPAN on a naked short option is close to a future's).
+        spec = { ...spec, account: { ...spec.account, ...OPTION_CHARGES, ...(sell && { marginPct: spec.account.marginPct }) } };
+      }
     }
   }
   const sessionDays = m.dates.filter((d) => d >= fromDay && m.sessions.has(d));
@@ -150,7 +162,8 @@ self.onmessage = async (e: MessageEvent<Request>) => {
   const post = (r: Response) => self.postMessage(r);
   try {
     const m = await market(req.spec);
-    const chain = req.spec.account.vehicle === "options" ? await loadChain(req.spec.symbol) : null;
+    const chain = req.spec.cfg.strategy === "option_sell" ? await loadChain(`${req.spec.symbol}_weekly`)
+      : req.spec.account.vehicle === "options" || req.spec.account.vehicle === "sell" ? await loadChain(req.spec.symbol) : null;
     if (req.kind === "run") {
       post({ kind: "run", id: req.id, result: run(m, req.spec, req.spec.cfg, chain) });
       return;

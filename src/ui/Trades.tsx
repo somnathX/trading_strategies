@@ -17,7 +17,13 @@ const When = ({ t }: { t: number }) => {
   return <span className="when"><span>{d}</span><span className="when-sub">{wd} {time(t)}</span></span>;
 };
 /** What was actually bought or sold: futures, or the option strike, type and expiry. */
-const traded = (r: TradeRow) => (r.option ? `${r.option.strike} ${r.option.type}` : "Futures");
+const STRUCTURE = { double_calendar: "Calendar", strangle: "Strangle", iron_condor: "Condor" } as const;
+const traded = (r: TradeRow) => {
+  const o = r.option;
+  if (!o) return "Futures";
+  if (o.legs) return `${STRUCTURE[o.structure!]} ${o.legs[0].strike} / ${o.legs[1].strike}`; // sold call / sold put
+  return `${o.sell ? "Sold " : ""}${o.strike} ${o.type}`;
+};
 
 const COLS: Col[] = [
   { key: "in", label: "In", get: (r) => r.entryTime, render: (r) => <When t={r.entryTime} /> },
@@ -39,6 +45,12 @@ const COLS: Col[] = [
 function story(r: TradeRow, cfg: StrategyConfig): string {
   const o = r.option;
   if (!o) return underlyingStory(r, cfg);
+  if (o.legs) {
+    const legs = o.legs.map((l) => `${l.qty > 0 ? "bought" : "sold"} ${l.strike} ${l.type === "CE" ? "call" : "put"} (${fmtISO(l.expiry, false)}) ${num(l.entry)} → ${num(l.exit)}`).join("; ");
+    const why = { target: "at the profit target", stop: "at the stop loss", time: "before expiry", open_end: "when the test window ended" }[r.outcome] ?? "";
+    return `Index at ${num(r.entryPrice)}, at-the-money IV ${(o.iv * 100).toFixed(1)}%. ${r.lots} lot${r.lots > 1 ? "s" : ""} per leg: ${legs}. `
+      + `${o.sell ? `Received ${num(o.entry)}, paid ${num(o.exit)} to close` : `Paid ${num(o.entry)}, closed for ${num(o.exit)}`} ${why} with the index at ${num(r.exitPrice)}: ${o.pnl >= 0 ? "+" : ""}${num(o.pnl)} per unit after slippage.`;
+  }
   const leg = `${o.strike} ${o.type === "CE" ? "call" : "put"}`;
   const roll = o.rolls ? ` Rolled to the next month ${o.rolls} time${o.rolls > 1 ? "s" : ""}, ending in the ${fmtISO(o.expiry)} expiry.` : "";
   return `${underlyingStory(r, cfg).replace(/^(Bought|Sold short) [^ ]+ lots? \(\d+\) at/, "Index at")} Traded as the ${leg} (${fmtISO(o.expiry, false)} expiry, `
@@ -175,7 +187,7 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
             <div className="detail-head">
               <h2>
                 <span className={`side-tag ${current.side}`}>{current.side}</span> {fmtISO(current.sessionDate)}
-                <span className="detail-traded">{current.option ? `${current.option.strike} ${current.option.type}` : "Futures"} · {current.lots} lot{current.lots > 1 ? "s" : ""}</span>
+                <span className="detail-traded">{current.option ? traded(current) : "Futures"} · {current.lots} lot{current.lots > 1 ? "s" : ""}</span>
                 <span className={`detail-pnl ${tone(current.netInr)}`}>{inr(current.netInr)}</span>
               </h2>
               <div className="pager">

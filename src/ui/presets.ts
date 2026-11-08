@@ -11,6 +11,7 @@ export interface Preset {
 export const STRATEGIES: { value: StrategyKind; label: string; short: string }[] = [
   { value: "orb", label: "Opening range breakout", short: "ORB" },
   { value: "ma_supertrend", label: "MA cross + SuperTrend", short: "MA + ST" },
+  { value: "option_sell", label: "Weekly option selling", short: "Selling" },
 ];
 
 /** Starting points. Each is the defaults plus a few changes, so they're easy to read and compare. */
@@ -58,19 +59,32 @@ export const PRESETS: Preset[] = [
   { id: "top-10", name: "Top 10 · 15m · SMA 10/200 · ST 29×3", interval: 15,
     description: "From the full search (₹5 L, 1% risk, overnight). ₹3.4 L in 2022–25, ₹1.8 L last year; worst drop −15%. Tuned on Nifty. Switches to 15m, keeps your instrument.",
     cfg: { strategy: "ma_supertrend", maType: "sma", maFast: 10, maSlow: 200, stPeriod: 29, stMultiplier: 3 } },
+  { id: "double-calendar", name: "Double calendar · weekly · VIX 10–18",
+    description: "Sell this week's call and put one expected move away, buy the same strikes next week. Closed a day before expiry, at +25% or −40% of the debit.",
+    cfg: { strategy: "option_sell", slippagePoints: 0.5 } },
+  { id: "short-strangle", name: "Short strangle · weekly",
+    description: "Sell this week's call and put one expected move away, no hedge. Closed at +50% of the credit, −100%, or a day before expiry.",
+    cfg: { strategy: "option_sell", slippagePoints: 0.5, sellStructure: "strangle", ivMin: 0, ivMax: 0, targetPct: 50, stopPct: 100 } },
+  { id: "iron-condor", name: "Iron condor · weekly",
+    description: "A strangle hedged with options half an expected move further out, so the loss is capped. Closed at +50% of the credit, −100%, or a day before expiry.",
+    cfg: { strategy: "option_sell", slippagePoints: 0.5, sellStructure: "iron_condor", ivMin: 0, ivMax: 0, targetPct: 50, stopPct: 100 } },
 ];
 
 export const presetConfig = (p: Preset): StrategyConfig => ({ ...DEFAULT_CONFIG, ...p.cfg });
 export const presetsFor = (kind: StrategyKind) => PRESETS.filter((p) => (p.cfg.strategy ?? "orb") === kind);
 
-/** Settings that only the MA cross + SuperTrend strategy uses; everything else is opening-range only. */
-const TREND_KEYS: (keyof StrategyConfig)[] = ["maType", "maFast", "maSlow", "stPeriod", "stMultiplier", "trendCloseEod", "trendLastEntry"];
+/** Settings only the MA cross + SuperTrend / option-selling strategies use; everything else is opening-range only. */
+const OWN_KEYS: Partial<Record<StrategyKind, (keyof StrategyConfig)[]>> = {
+  ma_supertrend: ["maType", "maFast", "maSlow", "stPeriod", "stMultiplier", "trendCloseEod", "trendLastEntry"],
+  option_sell: ["sellStructure", "sellWidth", "sellWing", "ivMin", "ivMax", "exitDaysBefore", "targetPct", "stopPct"],
+};
 const SHARED_KEYS: (keyof StrategyConfig)[] = ["strategy", "slippagePoints"];
+const ownerOf = (k: keyof StrategyConfig): StrategyKind =>
+  (Object.keys(OWN_KEYS) as StrategyKind[]).find((s) => OWN_KEYS[s]!.includes(k)) ?? "orb";
 
-/** The settings that matter for this config's strategy (so edits to the other strategy don't count). */
+/** The settings that matter for this config's strategy (so edits to the other strategies don't count). */
 function relevant(cfg: StrategyConfig): Partial<StrategyConfig> {
-  const keys = (Object.keys(cfg) as (keyof StrategyConfig)[]).filter((k) =>
-    SHARED_KEYS.includes(k) || (cfg.strategy === "ma_supertrend") === TREND_KEYS.includes(k));
+  const keys = (Object.keys(cfg) as (keyof StrategyConfig)[]).filter((k) => SHARED_KEYS.includes(k) || ownerOf(k) === cfg.strategy);
   return Object.fromEntries(keys.map((k) => [k, cfg[k]]));
 }
 
@@ -82,6 +96,12 @@ export function matchPreset(cfg: StrategyConfig): Preset | null {
 
 /** One-line description of the settings, e.g. for buttons and saved-run names. */
 export function describe(cfg: StrategyConfig): string {
+  if (cfg.strategy === "option_sell") {
+    const what = { double_calendar: "Double calendar", strangle: "Short strangle", iron_condor: "Iron condor" }[cfg.sellStructure];
+    const iv = cfg.ivMin || cfg.ivMax ? ` · IV ${cfg.ivMin || 0}–${cfg.ivMax || "∞"}%` : "";
+    const exits = [cfg.targetPct && `+${cfg.targetPct}%`, cfg.stopPct && `−${cfg.stopPct}%`].filter(Boolean).join("/");
+    return `${what} · ±${cfg.sellWidth} move${iv} · out ${cfg.exitDaysBefore}d before expiry${exits ? ` or ${exits}` : ""}`;
+  }
   if (cfg.strategy === "ma_supertrend") {
     const ma = cfg.maType.toUpperCase();
     return `${ma} ${cfg.maFast}/${cfg.maSlow} cross · SuperTrend ${cfg.stPeriod}, ${cfg.stMultiplier} · ${cfg.trendCloseEod ? "intraday" : "overnight"}${cfg.trendLastEntry ? ` · entries before ${cfg.trendLastEntry}` : ""}`;

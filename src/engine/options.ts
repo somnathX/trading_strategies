@@ -9,7 +9,8 @@ export interface OptionChain {
 }
 
 export interface OptionSettings {
-  itmStrikes: number; // how many strikes in the money to buy (6 × 50 = 300 pts on Nifty)
+  itmStrikes: number; // how many strikes in the money to buy (6 × 50 = 300 pts on Nifty); when selling, strikes out of the money
+  sell?: boolean; // sell a put for longs / a call for shorts instead of buying
   minDte: number; // skip to the next monthly expiry when fewer calendar days remain
 }
 
@@ -18,16 +19,31 @@ export interface OptionLeg {
   strike: number;
   expiry: string; // of the last leg, after any rolls
   entry: number; // premium paid on the first leg
-  exit: number; // entry + pnl: what the position is worth at exit, as one price
+  exit: number; // what the position is worth at exit, as one price (entry + pnl bought, entry − pnl sold)
   pnl: number; // premium points, summed over rolls
   stop: number; // premium at the SuperTrend / range stop, estimated with delta (used for sizing)
+  sell?: boolean; // written, not bought: entry is premium received, exit is the buy-back price
   delta: number; // at entry
   rolls: number;
   iv: number; // at entry
+  // Multi-leg positions (option selling strategy). type/strike above describe the sold call.
+  legs?: SpreadLeg[];
+  structure?: import("./types").SellStructure;
+  turnover?: { buy: number; sell: number }; // premium points per unit, all legs, entry and exit
+  margin?: number; // points per unit the broker blocks (approximate)
+}
+
+export interface SpreadLeg {
+  type: "CE" | "PE";
+  strike: number;
+  expiry: string;
+  qty: 1 | -1; // -1 = sold
+  entry: number;
+  exit: number;
 }
 
 const R = 0.065; // risk-free rate (India 91-day T-bill, roughly)
-const YEAR = 365 * 86400;
+export const YEAR = 365 * 86400;
 
 function ncdf(x: number): number { // Abramowitz–Stegun 7.1.26, |error| < 1.5e-7
   const t = 1 / (1 + 0.3275911 * Math.abs(x) / Math.SQRT2);
@@ -64,7 +80,7 @@ export function impliedVol(type: "CE" | "PE", price: number, spot: number, strik
 }
 
 /** Epoch of 15:30 IST on an expiry date. */
-const expiryClose = (iso: string) => dayStart(isoToDay(iso)) + MARKET_CLOSE * 60;
+export const expiryClose = (iso: string) => dayStart(isoToDay(iso)) + MARKET_CLOSE * 60;
 
 /** Prices options for trades on one index, using each strike's IV from the previous trading day's close. */
 export class OptionPricer {
@@ -123,7 +139,8 @@ export class OptionPricer {
 
   private strikeFor(type: "CE" | "PE", spot: number): number {
     const atm = Math.round(spot / this.chain.step) * this.chain.step;
-    return type === "CE" ? atm - this.s.itmStrikes * this.chain.step : atm + this.s.itmStrikes * this.chain.step;
+    const off = (this.s.sell ? -1 : 1) * this.s.itmStrikes * this.chain.step; // sold options go out of the money
+    return type === "CE" ? atm - off : atm + off;
   }
 
   /** Close of the last candle at or before 15:30 on `iso` (or the nearest earlier session). */
@@ -135,9 +152,11 @@ export class OptionPricer {
     return null;
   }
 
-  /** Buy a call for longs / a put for shorts, rolling at expiry; null when there's no option data. */
+  /** Buy a call for longs / a put for shorts (or sell a put / a call), rolling at expiry; null when there's no option data. */
   leg(t: Trade): OptionLeg | null {
-    const type = t.side === "long" ? "CE" : "PE";
+    const sell = !!this.s.sell;
+    const type = (t.side === "long") !== sell ? "CE" : "PE";
+    const sign = sell ? -1 : 1; // a seller gains when the premium falls
     let at = t.entryTime;
     let spot = t.entryPrice;
     let expiry = this.expiryFor(dayOf(at));
@@ -153,7 +172,7 @@ export class OptionPricer {
       if (bar === null) return null;
       const s = this.m.c.c[bar];
       const settle = bs(type, s, strike, 0, 0).price; // expires at intrinsic
-      pnl += settle - open;
+      pnl += sign * (settle - open);
       at = this.m.c.t[bar];
       const next = this.expiryFor(dayOf(at) + 1);
       if (!next || next === expiry) return null;
@@ -166,11 +185,12 @@ export class OptionPricer {
     }
     const last = this.price(type, strike, expiry, t.exitTime, t.exitPrice);
     if (!last) return null;
-    pnl += last.price - open;
+    pnl += sign * (last.price - open);
     const delta = Math.abs(first.delta);
     return {
-      type, strike, expiry, entry: first.price, exit: first.price + pnl, pnl,
-      stop: Math.max(0, first.price - delta * Math.abs(t.entryPrice - t.stopPrice)), delta, rolls, iv: first.iv,
+      type, strike, expiry, entry: first.price, exit: first.price + sign * pnl, pnl,
+      stop: Math.max(0, first.price - sign * delta * Math.abs(t.entryPrice - t.stopPrice)), delta, rolls, iv: first.iv,
+      ...(sell && { sell }),
     };
   }
 }
