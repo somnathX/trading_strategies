@@ -8,8 +8,8 @@ import { heatStyle, METRICS } from "./metricsMeta";
 const SWEEPABLE: { key: keyof StrategyConfig; label: string; values: string; kind?: StrategyKind }[] = [ // no kind = opening range
   { key: "maFast", label: "Fast average", values: "5, 10, 15, 20, 30", kind: "ma_supertrend" },
   { key: "maSlow", label: "Slow average", values: "30, 50, 100, 200", kind: "ma_supertrend" },
-  { key: "stPeriod", label: "SuperTrend ATR period", values: "7, 10, 14, 20", kind: "ma_supertrend" },
-  { key: "stMultiplier", label: "SuperTrend multiplier", values: "1.5, 2, 2.5, 3, 4", kind: "ma_supertrend" },
+  { key: "stPeriod", label: "SuperTrend ATR period", values: "7, 10, 14, 20, 30, 40", kind: "ma_supertrend" },
+  { key: "stMultiplier", label: "SuperTrend multiplier", values: "1, 1.5, 2, 2.5, 3, 4", kind: "ma_supertrend" },
   { key: "maType", label: "Average type", values: "ema, sma", kind: "ma_supertrend" },
   { key: "trendCloseEod", label: "Close at day end", values: "false, true", kind: "ma_supertrend" },
   { key: "trendReenterOnFlip", label: "Re-enter when ST turns back", values: "false, true", kind: "ma_supertrend" },
@@ -67,15 +67,22 @@ export function Sweep({ state, cfg, hasOos, onRun, onApply }: {
 }) {
   // Only settings that matter for the current strategy (entry slippage matters for all).
   const options = SWEEPABLE.filter((s) => s.key === "slippagePoints" || (s.kind ?? "orb") === cfg.strategy);
-  const [x0, y0] = ({ orb: ["orbMinutes", "stopLevel"], ma_supertrend: ["maFast", "maSlow"], option_sell: ["sellWidth", "stopPct"] } as const)[cfg.strategy];
+  const [x0, y0] = ({ orb: ["orbMinutes", "stopLevel"], ma_supertrend: ["stPeriod", "stMultiplier"], option_sell: ["sellWidth", "stopPct"] } as const)[cfg.strategy];
+  // Starting values for an axis, always including the current setting so the sweep shows where you are now.
+  const valuesFor = (key: keyof StrategyConfig) => {
+    const base = SWEEPABLE.find((s) => s.key === key)!.values;
+    const now = cfg[key];
+    if (typeof now !== "number" || parseValues(base).includes(now)) return base;
+    return [...parseValues(base) as number[], now].sort((a, b) => a - b).join(", ");
+  };
   const shown = state;
   if (shown && !(options.some((o) => o.key === shown.x.key) && options.some((o) => o.key === shown.y.key))) {
     state = null; // results from the other strategy
   }
   const [xKey, setXKey] = useState<keyof StrategyConfig>(state?.x.key ?? x0);
   const [yKey, setYKey] = useState<keyof StrategyConfig>(state?.y.key ?? y0);
-  const [xVals, setXVals] = useState(SWEEPABLE.find((s) => s.key === xKey)!.values);
-  const [yVals, setYVals] = useState(SWEEPABLE.find((s) => s.key === yKey)!.values);
+  const [xVals, setXVals] = useState(() => (state?.x.key === xKey ? state.x.values.map((v) => v ?? "none").join(", ") : valuesFor(xKey)));
+  const [yVals, setYVals] = useState(() => (state?.y.key === yKey ? state.y.values.map((v) => v ?? "none").join(", ") : valuesFor(yKey)));
   const [metric, setMetric] = useState<MetricKey>(state?.metric ?? "sharpe");
   const m = METRICS.find((x) => x.key === metric)!;
   const x = { key: xKey, values: parseValues(xVals) };
@@ -89,7 +96,7 @@ export function Sweep({ state, cfg, hasOos, onRun, onApply }: {
         <select value={key} onChange={(e) => {
           const s = SWEEPABLE.find((o) => o.key === e.target.value)!;
           setKey(s.key);
-          setVals(s.values);
+          setVals(valuesFor(s.key));
         }}>
           {options.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
         </select>

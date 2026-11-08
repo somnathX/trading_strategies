@@ -25,9 +25,26 @@ const traded = (r: TradeRow) => {
   return `${o.sell ? "Sold " : ""}${o.strike} ${o.type}`;
 };
 
-const COLS: Col[] = [
-  { key: "in", label: "In", get: (r) => r.entryTime, render: (r) => <When t={r.entryTime} /> },
-  { key: "out", label: "Out", get: (r) => r.exitTime, render: (r) => <When t={r.exitTime} /> },
+/** Why the trade was opened: a cross, a re-entry, a breakout… */
+const entryWhy = (r: TradeRow): string => r.reentry ?? (r.entryStyle === "ma_cross" ? "cross" : r.entryStyle);
+const ENTRY_LABELS: Record<string, string> = {
+  cross: "MA cross", st_back: "ST turned back", next_day: "Next-day re-entry",
+  breakout: "Range breakout", fib_pullback: "Pullback", option_sell: "Weekly entry",
+};
+/** Why it closed, naming the SuperTrend colour rather than just "flip". */
+const exitWhy = (r: TradeRow) => (finalExit(r) === "st_flip"
+  ? `ST turned ${r.side === "long" ? "red" : "green"}`
+  : EXIT_LABELS[finalExit(r)] ?? finalExit(r));
+
+/**
+ * When a trade actually filled. Trades store the open time of the candle they happened on; MA + SuperTrend trades fill
+ * at that candle's close, `bar` seconds later. (Range-breakout stops fill inside the candle, so those keep the open time.)
+ */
+const filled = (r: TradeRow, t: number, bar: number) => (r.entryStyle === "ma_cross" ? t + bar : t);
+
+const cols = (bar: number): Col[] => [
+  { key: "in", label: "In", get: (r) => r.entryTime, render: (r) => <When t={filled(r, r.entryTime, bar)} /> },
+  { key: "out", label: "Out", get: (r) => r.exitTime, render: (r) => <When t={filled(r, r.exitTime, bar)} /> },
   { key: "side", label: "Side", get: (r) => r.side, render: (r) => <span className={`side-tag ${r.side}`}>{r.side}</span> },
   { key: "traded", label: "Traded", get: traded, render: (r) => (r.option
     ? <span className="when"><span>{traded(r)}</span><span className="when-sub">exp {fmtISO(r.option.expiry, false)}{r.option.rolls ? ` · rolled ${r.option.rolls}×` : ""}</span></span>
@@ -38,13 +55,14 @@ const COLS: Col[] = [
   { key: "exitpx", label: "Exit", get: (r) => r.option?.exit ?? r.exitPrice, render: (r) => num(r.option?.exit ?? r.exitPrice), num: true },
   { key: "pts", label: "Points", get: (r) => r.option?.pnl ?? r.pnlPoints, render: (r) => num(r.option?.pnl ?? r.pnlPoints, 1), num: true },
   { key: "net", label: "Net", get: (r) => r.netInr, render: (r) => inr(r.netInr), num: true },
-  { key: "exit", label: "Reason", get: (r) => finalExit(r), render: (r) => EXIT_LABELS[finalExit(r)] ?? finalExit(r) },
+  { key: "exit", label: "Reason", get: (r) => `${ENTRY_LABELS[entryWhy(r)]} ${exitWhy(r)}`,
+    render: (r) => <span className="when"><span>In: {ENTRY_LABELS[entryWhy(r)] ?? entryWhy(r)}</span><span className="when-sub">Out: {exitWhy(r)}</span></span> },
 ];
 
 /** One sentence that says what happened in the trade. */
-function story(r: TradeRow, cfg: StrategyConfig): string {
+function story(r: TradeRow, cfg: StrategyConfig, bar: number): string {
   const o = r.option;
-  if (!o) return underlyingStory(r, cfg);
+  if (!o) return underlyingStory(r, cfg, bar);
   if (o.legs) {
     const legs = o.legs.map((l) => `${l.qty > 0 ? "bought" : "sold"} ${l.strike} ${l.type === "CE" ? "call" : "put"} (${fmtISO(l.expiry, false)}) ${num(l.entry)} → ${num(l.exit)}`).join("; ");
     const why = { target: "at the profit target", stop: "at the stop loss", time: cfg.exitDaysBefore ? "before expiry" : "at expiry", open_end: "when the test window ended" }[r.outcome] ?? "";
@@ -53,11 +71,11 @@ function story(r: TradeRow, cfg: StrategyConfig): string {
   }
   const leg = `${o.strike} ${o.type === "CE" ? "call" : "put"}`;
   const roll = o.rolls ? ` Rolled to the next month ${o.rolls} time${o.rolls > 1 ? "s" : ""}, ending in the ${fmtISO(o.expiry)} expiry.` : "";
-  return `${underlyingStory(r, cfg).replace(/^(Bought|Sold short) [^ ]+ lots? \(\d+\) at/, "Index at")} Traded as the ${leg} (${fmtISO(o.expiry, false)} expiry, `
+  return `${underlyingStory(r, cfg, bar).replace(/^(Bought|Sold short) [^ ]+ lots? \(\d+\) at/, "Index at")} Traded as the ${leg} (${fmtISO(o.expiry, false)} expiry, `
     + `IV ${(o.iv * 100).toFixed(1)}%, delta ${o.delta.toFixed(2)}): ${r.lots} lot${r.lots > 1 ? "s" : ""} (${r.qty}) bought at ${num(o.entry)}, worth ${num(o.exit)} at exit, ${o.pnl >= 0 ? "+" : ""}${num(o.pnl)} per unit.${roll}`;
 }
 
-function underlyingStory(r: TradeRow, cfg: StrategyConfig): string {
+function underlyingStory(r: TradeRow, cfg: StrategyConfig, bar: number): string {
   const dir = r.side === "long" ? "Bought" : "Sold short";
   const size = `${r.lots} lot${r.lots > 1 ? "s" : ""} (${r.qty})`;
   if (r.entryStyle === "ma_cross") {
@@ -67,13 +85,14 @@ function underlyingStory(r: TradeRow, cfg: StrategyConfig): string {
       : r.reentry
       ? `the day's first candle closed with SuperTrend still ${r.side === "long" ? "green" : "red"} after yesterday's day-end close (line at ${num(r.stopPrice)})`
       : `the ${cfg.maFast} ${ma} crossed ${r.side === "long" ? "above" : "below"} the ${cfg.maSlow} ${ma} with SuperTrend ${r.side === "long" ? "green" : "red"} (line at ${num(r.stopPrice)})`;
-    const when = `${time(r.exitTime)}${r.holdDays > 1 ? ` on ${date(r.exitTime)}` : ""}`;
+    const out = filled(r, r.exitTime, bar);
+    const when = `${time(out)}${r.holdDays > 1 ? ` on ${date(out)}` : ""}`;
     const exit = {
       st_flip: `Closed when SuperTrend turned ${r.side === "long" ? "red" : "green"} at ${when}, at ${num(r.exitPrice)}.`,
       eod: `Closed at the session end (${when}), at ${num(r.exitPrice)}.`,
       open_end: `Still open when the test window ended; marked at ${num(r.exitPrice)} (${when}).`,
     }[r.outcome] ?? `Exited at ${when}, at ${num(r.exitPrice)}.`;
-    return `${dir} ${size} at ${num(r.entryPrice)} (${time(r.entryTime)}) when ${cross}. ${exit}${r.holdDays > 1 ? ` Held ${r.holdDays} sessions.` : ""}`;
+    return `${dir} ${size} at ${num(r.entryPrice)} (${time(filled(r, r.entryTime, bar))}, the candle's close) when ${cross}. ${exit}${r.holdDays > 1 ? ` Held ${r.holdDays} sessions.` : ""}`;
   }
   const edge = r.side === "long" ? `above the opening-range high ${num(r.orbHigh ?? 0)}` : `below the opening-range low ${num(r.orbLow ?? 0)}`;
   const how = r.entryStyle === "fib_pullback" ? `on a pullback after the break ${edge}` : `on a close ${edge}`;
@@ -93,26 +112,36 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
   const [side, setSide] = useState<"all" | "long" | "short">("all");
   const [result, setResult] = useState<"all" | "win" | "loss">("all");
   const [exit, setExit] = useState("all");
+  const [entry, setEntry] = useState("all");
   const [selected, setSelected] = useState<number | null>(null);
+  const bar = useMemo(() => { // candle length in seconds: the smallest gap between candles
+    let g = Infinity;
+    const t = market?.c.t ?? [];
+    for (let i = 1; i < Math.min(t.length, 500); i++) if (t[i] > t[i - 1]) g = Math.min(g, t[i] - t[i - 1]);
+    return Number.isFinite(g) ? g : 0;
+  }, [market]);
+  const COLS = useMemo(() => cols(bar), [bar]);
 
   const exits = useMemo(() => [...new Set(rows.map(finalExit))].sort(), [rows]);
+  const entries = useMemo(() => [...new Set(rows.map(entryWhy))].sort(), [rows]);
   const view = useMemo(() => {
     const col = COLS.find((c) => c.key === sort.key)!;
     return rows
       .filter((r) => (side === "all" || r.side === side)
         && (result === "all" || (result === "win" ? r.netInr > 0 : r.netInr <= 0))
-        && (exit === "all" || finalExit(r) === exit))
+        && (exit === "all" || finalExit(r) === exit)
+        && (entry === "all" || entryWhy(r) === entry))
       .sort((a, b) => {
         const x = col.get(a), y = col.get(b);
         return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
       });
-  }, [rows, sort, side, result, exit]);
+  }, [rows, sort, side, result, exit, entry, COLS]);
 
   // Arriving from the calendar: select that day's first trade. Otherwise start on the first trade.
   useEffect(() => {
     const pick = (focusDay && rows.find((r) => r.sessionDate === focusDay)) || null;
     if (pick) {
-      setSide("all"); setResult("all"); setExit("all");
+      setSide("all"); setResult("all"); setExit("all"); setEntry("all");
       setSelected(pick.entryTime);
     } else if (selected === null || !rows.some((r) => r.entryTime === selected)) {
       setSelected(rows[0]?.entryTime ?? null);
@@ -205,7 +234,7 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
                 <TradeChart market={market} trade={current} dayTrades={dayTrades} trend={trend} height={chartH} />
               </div>
               <div className="detail-side">
-                <p className={`story${more ? "" : " clamped"}`}>{story(current, cfg)}</p>
+                <p className={`story${more ? "" : " clamped"}`}>{story(current, cfg, bar)}</p>
                 <p className="hint">
                   {num(current.option?.pnl ?? current.pnlPoints, 1)} pts × {current.qty} = {inr(current.grossInr)}, minus {inr(current.costsInr)} costs.
                   {current.marginCapped && ` Sizing asked for ${current.wantedLots} lots; capped at ${current.lots} by capital.`}
@@ -227,6 +256,12 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
             <select aria-label="Result" value={result} onChange={(e) => setResult(e.target.value as typeof result)}>
               <option value="all">Wins &amp; losses</option><option value="win">Wins</option><option value="loss">Losses</option>
             </select>
+            {entries.length > 1 && (
+              <select aria-label="Entry" value={entry} onChange={(e) => setEntry(e.target.value)}>
+                <option value="all">Any entry</option>
+                {entries.map((x) => <option key={x} value={x}>{ENTRY_LABELS[x] ?? x}</option>)}
+              </select>
+            )}
             <select aria-label="Exit" value={exit} onChange={(e) => setExit(e.target.value)}>
               <option value="all">Any exit</option>
               {exits.map((x) => <option key={x} value={x}>{EXIT_LABELS[x] ?? x}</option>)}
