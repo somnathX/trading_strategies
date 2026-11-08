@@ -53,7 +53,7 @@ export const EXIT_LABELS: Record<string, string> = {
   opp_or_eod: "Opposite range break (close)",
   st_flip: "SuperTrend flip",
   target: "Profit target",
-  time: "Closed before expiry",
+  time: "Planned exit (expiry or days before)",
   open_end: "Still open at end of test",
 };
 

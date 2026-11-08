@@ -147,7 +147,7 @@ export function lotEstimate(rows: TradeRow[], lastPrice: number | null, lotSize:
   if (!sized.length) return null;
   const mid = <T,>(xs: T[]) => xs[xs.length >> 1];
   const lots = sized.map((r) => r.lots).sort((x, y) => x - y);
-  const stops = sized.map((r) => (r.option ? r.option.entry - r.option.stop : Math.abs(r.entryPrice - r.stopPrice))).sort((x, y) => x - y);
+  const stops = sized.map((r) => Math.abs(r.option ? r.option.entry - r.option.stop : r.entryPrice - r.stopPrice)).sort((x, y) => x - y);
   const options = sized.some((r) => r.option);
   return {
     median: mid(lots), min: lots[0], max: lots[lots.length - 1], capped: sized.filter((r) => r.marginCapped).length,

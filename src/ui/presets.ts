@@ -59,15 +59,16 @@ export const PRESETS: Preset[] = [
   { id: "top-10", name: "Top 10 · 15m · SMA 10/200 · ST 29×3", interval: 15,
     description: "From the full search (₹5 L, 1% risk, overnight). ₹3.4 L in 2022–25, ₹1.8 L last year; worst drop −15%. Tuned on Nifty. Switches to 15m, keeps your instrument.",
     cfg: { strategy: "ma_supertrend", maType: "sma", maFast: 10, maSlow: 200, stPeriod: 29, stMultiplier: 3 } },
-  { id: "double-calendar", name: "Double calendar · weekly · VIX 10–18",
-    description: "Sell this week's call and put one expected move away, buy the same strikes next week. Closed a day before expiry, at +25% or −40% of the debit.",
+  // Option selling, from a 2,592-setting sweep on Nifty weeklies (tuned 2022–25, checked on 2026). Results are 1 lot, after costs.
+  { id: "short-straddle", name: "Short straddle · weekly · IV ≥ 13%",
+    description: "Sell this week's at-the-money call and put, no hedge, held to expiry; weeks with IV under 13% are skipped; stop at −50% of the credit. Nifty: ₹3.9 L per lot Nov 2022–Nov 2026, up every year (₹41k in 2026). Unhedged: a big gap can lose far more than the backtest's worst week.",
     cfg: { strategy: "option_sell", slippagePoints: 0.5 } },
-  { id: "short-strangle", name: "Short strangle · weekly",
-    description: "Sell this week's call and put one expected move away, no hedge. Closed at +50% of the credit, −100%, or a day before expiry.",
-    cfg: { strategy: "option_sell", slippagePoints: 0.5, sellStructure: "strangle", ivMin: 0, ivMax: 0, targetPct: 50, stopPct: 100 } },
-  { id: "iron-condor", name: "Iron condor · weekly",
-    description: "A strangle hedged with options half an expected move further out, so the loss is capped. Closed at +50% of the credit, −100%, or a day before expiry.",
-    cfg: { strategy: "option_sell", slippagePoints: 0.5, sellStructure: "iron_condor", ivMin: 0, ivMax: 0, targetPct: 50, stopPct: 100 } },
+  { id: "iron-condor", name: "Iron condor · ATM · IV ≥ 13%",
+    description: "The straddle hedged with options half an expected move further out, so the loss is capped. Held to expiry, or closed at +50% of the credit. Nifty: ₹1.0 L per lot 2022–26, but −₹14k in 2026.",
+    cfg: { strategy: "option_sell", slippagePoints: 0.5, sellStructure: "iron_condor", stopPct: 0, targetPct: 50 } },
+  { id: "double-calendar", name: "Double calendar · ATM · IV ≥ 13%",
+    description: "Sell this week's at-the-money call and put, buy the same strikes in next week's expiry; held until this week's expiry. Nifty: ₹1.1 L per lot 2022–26, but −₹6k in 2026.",
+    cfg: { strategy: "option_sell", slippagePoints: 0.5, sellStructure: "double_calendar", stopPct: 0 } },
 ];
 
 export const presetConfig = (p: Preset): StrategyConfig => ({ ...DEFAULT_CONFIG, ...p.cfg });
@@ -75,7 +76,7 @@ export const presetsFor = (kind: StrategyKind) => PRESETS.filter((p) => (p.cfg.s
 
 /** Settings only the MA cross + SuperTrend / option-selling strategies use; everything else is opening-range only. */
 const OWN_KEYS: Partial<Record<StrategyKind, (keyof StrategyConfig)[]>> = {
-  ma_supertrend: ["maType", "maFast", "maSlow", "stPeriod", "stMultiplier", "trendCloseEod", "trendLastEntry"],
+  ma_supertrend: ["maType", "maFast", "maSlow", "stPeriod", "stMultiplier", "trendCloseEod", "trendReenter", "trendReenterOnFlip", "trendLastEntry"],
   option_sell: ["sellStructure", "sellWidth", "sellWing", "ivMin", "ivMax", "exitDaysBefore", "targetPct", "stopPct"],
 };
 const SHARED_KEYS: (keyof StrategyConfig)[] = ["strategy", "slippagePoints"];
@@ -104,7 +105,7 @@ export function describe(cfg: StrategyConfig): string {
   }
   if (cfg.strategy === "ma_supertrend") {
     const ma = cfg.maType.toUpperCase();
-    return `${ma} ${cfg.maFast}/${cfg.maSlow} cross · SuperTrend ${cfg.stPeriod}, ${cfg.stMultiplier} · ${cfg.trendCloseEod ? "intraday" : "overnight"}${cfg.trendLastEntry ? ` · entries before ${cfg.trendLastEntry}` : ""}`;
+    return `${ma} ${cfg.maFast}/${cfg.maSlow} cross · SuperTrend ${cfg.stPeriod}, ${cfg.stMultiplier} · ${cfg.trendCloseEod ? (cfg.trendReenter ? "intraday, re-enter next day" : "intraday") : "overnight"}${cfg.trendReenterOnFlip ? " · re-enter on ST turn" : ""}${cfg.trendLastEntry ? ` · entries before ${cfg.trendLastEntry}` : ""}`;
   }
   const entry = cfg.entryMode === "breakout" ? "breakout" : `pullback ${Math.round(cfg.fibEntryLevel * 100)}%`;
   const exit = { tp_ladder: "ladder", fib_tsl: "target + trail", eod: "no target" }[cfg.exitMode];

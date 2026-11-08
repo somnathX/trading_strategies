@@ -105,6 +105,43 @@ describe("MA cross + SuperTrend", () => {
     expect(intraday.some((t) => t.outcome === "eod")).toBe(true);
   });
 
+  it("can re-enter at the next day's first candle when SuperTrend still agrees after a day-end close", () => {
+    const re = runBacktest(m, trendCfg({ trendCloseEod: true, trendReenter: true }));
+    const again = re.filter((t) => t.reentry);
+    expect(again.length).toBeGreaterThan(0); // the option matters on this data
+    expect(re.every((t) => t.holdDays === 1)).toBe(true);
+    for (const t of again) {
+      const prev = re[re.indexOf(t) - 1];
+      const j = k(t.entryTime);
+      expect([prev.outcome, prev.side]).toEqual(["eod", t.side]); // yesterday closed at day end on the same side
+      expect(m.day[bars[j - 1]]).toBeLessThan(m.day[bars[j]]); // today's first candle
+      expect(st.up[j]).toBe(t.side === "long"); // SuperTrend still on its side
+    }
+    // After every day-end close, the next morning's first candle decides: back in exactly when SuperTrend agrees.
+    for (const t of re.filter((t) => t.outcome === "eod")) {
+      const j = k(t.exitTime) + 1;
+      if (j >= bars.length - 1) continue;
+      const back = re.some((u) => u.reentry === "next_day" && k(u.entryTime) === j);
+      expect(back).toBe(st.up[j] === (t.side === "long"));
+    }
+  });
+
+  it("can re-enter when SuperTrend turns back after a flip exit, while the MAs are still crossed that way", () => {
+    const re = runBacktest(m, trendCfg({ trendReenterOnFlip: true }));
+    const back = re.filter((t) => t.reentry === "st_back");
+    expect(back.length).toBeGreaterThan(0); // the option matters on this data
+    for (const t of back) {
+      const j = k(t.entryTime);
+      const prev = re[re.indexOf(t) - 1];
+      expect([prev.outcome, prev.side]).toEqual(["st_flip", t.side]);
+      expect(st.up[j]).toBe(t.side === "long");
+      // The MAs stayed on the trade's side from the flip exit to the re-entry.
+      for (let q = k(prev.exitTime); q <= j; q++) expect(t.side === "long" ? fast[q] > slow[q] : fast[q] < slow[q]).toBe(true);
+    }
+    // Every plain cross entry is still taken, unless a re-entered position was already open.
+    expect(re.filter((t) => !t.reentry).length).toBeLessThanOrEqual(trades.length);
+  });
+
   it("skips crosses that go against SuperTrend", () => {
     const entries = new Set(trades.map((t) => k(t.entryTime)));
     const against = bars.map((_, j) => j).filter((j) => j > 0 && (

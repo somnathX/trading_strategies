@@ -65,11 +65,15 @@ export function Num({ value, onChange, label, suffix, ...rest }: {
   value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; label?: string; suffix?: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  // Out-of-range values (e.g. capital 0, which every return is divided by) stay in the box but are never applied;
+  // leaving the box puts back the last valid value.
+  const ok = (v: number) => Number.isFinite(v) && v >= (rest.min ?? -Infinity) && v <= (rest.max ?? Infinity);
   const input = (
     <input type="number" inputMode="decimal" aria-label={label} value={draft ?? value} {...rest}
+      aria-invalid={draft !== null && draft !== "" && !ok(Number(draft))}
       onChange={(e) => {
         setDraft(e.target.value);
-        if (Number.isFinite(e.target.valueAsNumber)) onChange(e.target.valueAsNumber);
+        if (ok(e.target.valueAsNumber)) onChange(e.target.valueAsNumber);
       }}
       onBlur={() => setDraft(null)} />
   );

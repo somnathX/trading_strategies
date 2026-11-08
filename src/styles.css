@@ -165,6 +165,7 @@ input:not([type="checkbox"]):not([type="radio"]):focus-visible, select:focus-vis
 select { cursor: pointer; }
 .with-suffix { position: relative; display: block; }
 .with-suffix input { padding-right: 46px; }
+input[aria-invalid="true"] { border-color: var(--neg); box-shadow: 0 0 0 1px var(--neg); }
 .suffix { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); font-size: 12px; pointer-events: none; }
 .check { display: flex; align-items: center; gap: 8px; min-height: 30px; cursor: pointer; }
 .check input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; cursor: pointer; }
@@ -293,12 +294,10 @@ select { cursor: pointer; }
   white-space: normal;
   box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
   transform: translateX(-50%);
-  opacity: 0;
-  visibility: hidden;
+  display: none; /* not just hidden: a hidden tip still takes room and made the side panel scroll sideways */
   pointer-events: none;
-  transition: opacity var(--fast) var(--ease);
 }
-.info:hover .tip, .info:focus-within .tip { opacity: 1; visibility: visible; }
+.info:hover .tip, .info:focus-within .tip { display: block; }
 
 /* "More options" disclosure */
 .more { border-top: 1px dashed var(--border); padding-top: 8px; }

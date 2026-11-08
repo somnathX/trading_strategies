@@ -54,7 +54,10 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
   const { bars, st } = series;
   const { c, t } = m.c;
   const trades: Trade[] = [];
-  let pos: { side: Side; k: number; price: number; stop: number } | null = null;
+  let pos = null as { side: Side; k: number; price: number; stop: number; reentry?: Trade["reentry"] } | null; // `as`: set inside open()/close()
+  let carry: Side | null = null; // closed at day end with SuperTrend still on its side: re-enter tomorrow if it still is
+  let flipped = null as Side | null; // stopped by a SuperTrend flip: re-enter if it turns back before the MAs cross the other way
+  const aligned = (side: Side, k: number) => (side === "long" ? series.fast[k] > series.slow[k] : series.fast[k] < series.slow[k]);
 
   const close = (k: number, outcome: string) => {
     const i = bars[k];
@@ -80,24 +83,44 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
       maxHoldSessions: 0,
       impulseLow: null,
       impulseHigh: null,
+      ...(pos!.reentry && { reentry: pos!.reentry }),
     });
     pos = null;
+  };
+  const open = (side: Side, k: number, reentry?: Trade["reentry"]) => {
+    const price = side === "long" ? c[bars[k]] + cfg.slippagePoints : c[bars[k]] - cfg.slippagePoints;
+    pos = { side, k, price, stop: st.line[k], ...(reentry && { reentry }) };
+    flipped = null;
   };
 
   for (let k = 1; k < bars.length; k++) {
     const i = bars[k];
     const lastOfDay = k === bars.length - 1 || m.day[bars[k + 1]] !== m.day[i];
+    const firstOfDay = m.day[bars[k - 1]] !== m.day[i];
 
     if (pos) {
-      if (exitSignal(series, k, pos.side)) close(k, "st_flip");
-      else if (cfg.trendCloseEod && lastOfDay) close(k, "eod");
+      if (exitSignal(series, k, pos.side)) {
+        if (cfg.trendReenterOnFlip) flipped = pos.side;
+        close(k, "st_flip");
+      }
+      else if (cfg.trendCloseEod && lastOfDay) {
+        if (cfg.trendReenter) carry = pos.side;
+        close(k, "eod");
+      }
     }
+
+    if (carry && firstOfDay) { // the day's first candle closed: SuperTrend still the same colour means back in
+      const side: Side = carry;
+      carry = null;
+      if (!exitSignal(series, k, side) && m.day[i] >= fromDay && !lastOfDay) { open(side, k, "next_day"); continue; }
+    }
+    if (flipped && !aligned(flipped, k)) flipped = null; // the MAs crossed back: wait for a fresh cross
 
     if (pos || m.day[i] < fromDay || (cfg.trendCloseEod && lastOfDay)) continue;
     const side = entrySignal(m, series, cfg, k);
-    if (side) {
-      const price = side === "long" ? c[i] + cfg.slippagePoints : c[i] - cfg.slippagePoints;
-      pos = { side, k, price, stop: st.line[k] };
+    if (side) open(side, k);
+    else if (flipped && !exitSignal(series, k, flipped) && !(cfg.trendLastEntry && m.minute[i] >= hmToMinutes(cfg.trendLastEntry))) {
+      open(flipped, k, "st_back"); // SuperTrend is back on the trade's side and the MAs never crossed against it
     }
   }
   if (pos) close(bars.length - 1, "open_end"); // still open when the test window ends: marked at the last close

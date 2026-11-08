@@ -47,7 +47,7 @@ function story(r: TradeRow, cfg: StrategyConfig): string {
   if (!o) return underlyingStory(r, cfg);
   if (o.legs) {
     const legs = o.legs.map((l) => `${l.qty > 0 ? "bought" : "sold"} ${l.strike} ${l.type === "CE" ? "call" : "put"} (${fmtISO(l.expiry, false)}) ${num(l.entry)} → ${num(l.exit)}`).join("; ");
-    const why = { target: "at the profit target", stop: "at the stop loss", time: "before expiry", open_end: "when the test window ended" }[r.outcome] ?? "";
+    const why = { target: "at the profit target", stop: "at the stop loss", time: cfg.exitDaysBefore ? "before expiry" : "at expiry", open_end: "when the test window ended" }[r.outcome] ?? "";
     return `Index at ${num(r.entryPrice)}, at-the-money IV ${(o.iv * 100).toFixed(1)}%. ${r.lots} lot${r.lots > 1 ? "s" : ""} per leg: ${legs}. `
       + `${o.sell ? `Received ${num(o.entry)}, paid ${num(o.exit)} to close` : `Paid ${num(o.entry)}, closed for ${num(o.exit)}`} ${why} with the index at ${num(r.exitPrice)}: ${o.pnl >= 0 ? "+" : ""}${num(o.pnl)} per unit after slippage.`;
   }
@@ -62,7 +62,11 @@ function underlyingStory(r: TradeRow, cfg: StrategyConfig): string {
   const size = `${r.lots} lot${r.lots > 1 ? "s" : ""} (${r.qty})`;
   if (r.entryStyle === "ma_cross") {
     const ma = cfg.maType.toUpperCase();
-    const cross = `the ${cfg.maFast} ${ma} crossed ${r.side === "long" ? "above" : "below"} the ${cfg.maSlow} ${ma} with SuperTrend ${r.side === "long" ? "green" : "red"} (line at ${num(r.stopPrice)})`;
+    const cross = r.reentry === "st_back"
+      ? `SuperTrend turned ${r.side === "long" ? "green" : "red"} again after the last trade's flip exit, with the ${cfg.maFast} ${ma} still ${r.side === "long" ? "above" : "below"} the ${cfg.maSlow} ${ma} (line at ${num(r.stopPrice)})`
+      : r.reentry
+      ? `the day's first candle closed with SuperTrend still ${r.side === "long" ? "green" : "red"} after yesterday's day-end close (line at ${num(r.stopPrice)})`
+      : `the ${cfg.maFast} ${ma} crossed ${r.side === "long" ? "above" : "below"} the ${cfg.maSlow} ${ma} with SuperTrend ${r.side === "long" ? "green" : "red"} (line at ${num(r.stopPrice)})`;
     const when = `${time(r.exitTime)}${r.holdDays > 1 ? ` on ${date(r.exitTime)}` : ""}`;
     const exit = {
       st_flip: `Closed when SuperTrend turned ${r.side === "long" ? "red" : "green"} at ${when}, at ${num(r.exitPrice)}.`,

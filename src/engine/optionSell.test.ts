@@ -16,7 +16,10 @@ function chain(spot: (d: string) => number): OptionChain {
     return { d, s, e: EXPIRIES.filter((x) => x >= d).slice(0, 3).map((x) => ({ x, k0, ce: col("CE", x), pe: col("PE", x) })) };
   }) };
 }
-const cfg = (p: Partial<StrategyConfig>): StrategyConfig => ({ ...DEFAULT_CONFIG, strategy: "option_sell", ivMin: 0, ivMax: 0, targetPct: 0, stopPct: 0, slippagePoints: 0, ...p });
+const cfg = (p: Partial<StrategyConfig>): StrategyConfig => ({
+  ...DEFAULT_CONFIG, strategy: "option_sell", sellStructure: "double_calendar", sellWidth: 1, exitDaysBefore: 1,
+  ivMin: 0, ivMax: 0, targetPct: 0, stopPct: 0, slippagePoints: 0, ...p,
+});
 
 describe("option selling", () => {
   it("double calendar: enters the day after expiry, exits a day before the next, earns decay in a flat market", () => {
@@ -44,6 +47,12 @@ describe("option selling", () => {
     const [t] = runOptionSell(chain((d) => (d >= "2026-01-07" ? 27000 : 25000)), cfg({ sellStructure: "iron_condor" }));
     const wing = t.option!.legs![2].strike - t.option!.legs![0].strike;
     expect(t.pnlPoints).toBeGreaterThanOrEqual(-(wing - t.option!.entry) - 1e-6);
+  });
+
+  it("can hold to the expiry close, where a short straddle is worth its intrinsic value", () => {
+    const [t] = runOptionSell(chain((d) => (d === "2026-01-12" ? 25200 : 25000)), cfg({ sellStructure: "strangle", sellWidth: 0, exitDaysBefore: 0 }));
+    expect([new Date(t.exitTime * 1000).toISOString().slice(0, 10), t.outcome]).toEqual(["2026-01-12", "time"]);
+    expect(t.option!.legs!.map((l) => l.exit)).toEqual([200, 0]); // 25000 call +200, 25000 put expires worthless
   });
 
   it("skips weeks outside the IV range and charges slippage per leg", () => {

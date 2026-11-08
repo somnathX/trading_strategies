@@ -75,6 +75,9 @@ export function loadSettings(files: DataFile[]): Settings {
   const merged: Settings = { ...d, ...s, cfg: { ...d.cfg, ...s.cfg }, account: { ...d.account, ...s.account }, usAccount: { ...d.usAccount, ...s.usAccount } };
   // NSE futures transaction charge moved from 0.00173% to 0.00183%: update the old default.
   if (merged.account.exchangePct === 0.00173) merged.account.exchangePct = d.account.exchangePct;
+  // Returns are divided by capital: a saved 0 (possible before inputs enforced their minimum) would break every chart.
+  if (!(merged.account.capital > 0)) merged.account.capital = d.account.capital;
+  if (!(merged.usAccount.capital > 0)) merged.usAccount.capital = d.usAccount.capital;
   return files.some((f) => f.file === merged.file) ? merged : d;
 }
 

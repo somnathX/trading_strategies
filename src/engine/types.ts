@@ -23,6 +23,8 @@ export interface StrategyConfig {
   stPeriod: number; // SuperTrend ATR period
   stMultiplier: number; // SuperTrend ATR multiple
   trendCloseEod: boolean; // flatten at the session close instead of holding overnight
+  trendReenter: boolean; // with trendCloseEod: re-enter at the next day's first candle if SuperTrend still agrees
+  trendReenterOnFlip: boolean; // after a SuperTrend-flip exit, re-enter when it flips back while the MAs are still crossed that way
   trendLastEntry: string | null; // "HH:MM": no new MA-cross entries on candles starting at/after this time
   // --- Option selling (weekly, from daily option closes) ---
   sellStructure: SellStructure;
@@ -30,7 +32,7 @@ export interface StrategyConfig {
   sellWing: number; // iron condor: hedges this many expected moves beyond the sold strikes
   ivMin: number; // % at-the-money IV (≈ India VIX) needed to enter; 0 = no floor
   ivMax: number; // % above which the week is skipped; 0 = no cap
-  exitDaysBefore: number; // trading days before the weekly expiry to close
+  exitDaysBefore: number; // trading days before the weekly expiry to close (0 = at the expiry close)
   targetPct: number; // close when the profit reaches this % of the premium paid / received (0 = off)
   stopPct: number; // close when the loss reaches this % of the premium (0 = off)
   // --- Opening range breakout ---
@@ -68,15 +70,17 @@ export const DEFAULT_CONFIG: StrategyConfig = {
   stPeriod: 10,
   stMultiplier: 3,
   trendCloseEod: false,
+  trendReenter: false,
+  trendReenterOnFlip: false,
   trendLastEntry: null,
-  sellStructure: "double_calendar",
-  sellWidth: 1,
+  sellStructure: "strangle", // with sellWidth 0: a short straddle (the "short-straddle" preset)
+  sellWidth: 0,
   sellWing: 0.5,
-  ivMin: 10,
-  ivMax: 18,
-  exitDaysBefore: 1,
-  targetPct: 25,
-  stopPct: 40,
+  ivMin: 13,
+  ivMax: 0,
+  exitDaysBefore: 0,
+  targetPct: 0,
+  stopPct: 50,
   orbMinutes: 15,
   entryMode: "breakout",
   fibEntryLevel: 0.5,
@@ -135,5 +139,7 @@ export interface Trade {
   maxHoldSessions: number;
   impulseLow: number | null;
   impulseHigh: number | null;
+  reentry?: "next_day" | "st_back"; // MA + SuperTrend, not on a cross: re-opened at the next day's first candle after a
+  // day-end close, or when SuperTrend turned back after a flip exit with the MAs still crossed the trade's way
   option?: import("./options").OptionLeg; // set when the trade is taken with options instead of futures
 }

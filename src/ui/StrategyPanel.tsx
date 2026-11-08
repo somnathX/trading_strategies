@@ -317,11 +317,11 @@ function SellSteps({ cfg, set, symbol, hasData }: { cfg: StrategyConfig; set: (p
         </div>
       </Step>
 
-      <Step n={3} title="Exit" text={`Closed at the close ${cfg.exitDaysBefore} trading day${cfg.exitDaysBefore > 1 ? "s" : ""} before expiry${cfg.targetPct || cfg.stopPct
+      <Step n={3} title="Exit" text={`${cfg.exitDaysBefore ? `Closed at the close ${cfg.exitDaysBefore} trading day${cfg.exitDaysBefore > 1 ? "s" : ""} before expiry` : "Held to the expiry close, settling at intrinsic value"}${cfg.targetPct || cfg.stopPct
         ? `, or earlier at the first daily close with ${[cfg.targetPct && `a profit of ${cfg.targetPct}%`, cfg.stopPct && `a loss of ${cfg.stopPct}%`].filter(Boolean).join(" or ")} of the premium ${cfg.sellStructure === "double_calendar" ? "paid" : "received"}`
         : ""}. Prices are daily closes, so stops are checked once a day.`}>
-        <Segmented label="Days before expiry" value={cfg.exitDaysBefore} onChange={(v) => set({ exitDaysBefore: v })}
-          options={[1, 2, 3].map((n) => ({ value: n, label: `${n} day${n > 1 ? "s" : ""}` }))} />
+        <Segmented label="Close" value={cfg.exitDaysBefore} onChange={(v) => set({ exitDaysBefore: v })}
+          options={[0, 1, 2, 3].map((n) => ({ value: n, label: n ? `${n} day${n > 1 ? "s" : ""} before` : "At expiry" }))} />
         <div className="row2">
           <Field label="Profit target" hint={cfg.targetPct ? undefined : "Off"}><Num value={cfg.targetPct} min={0} max={500} step={5} suffix="%" onChange={(v) => set({ targetPct: off(v) })} /></Field>
           <Field label="Stop loss" hint={cfg.stopPct ? undefined : "Off"}><Num value={cfg.stopPct} min={0} max={500} step={10} suffix="%" onChange={(v) => set({ stopPct: off(v) })} /></Field>
@@ -344,6 +344,10 @@ function TrendSteps({ cfg, set, open, close }: { cfg: StrategyConfig; set: (p: P
           <Field label="Slow"><Num value={cfg.maSlow} min={3} step={1} suffix="bars" onChange={(v) => set({ maSlow: Math.round(v) })} /></Field>
         </div>
         {cfg.maFast >= cfg.maSlow && <p className="field-warn" role="alert">The fast average should be shorter than the slow one.</p>}
+        <Switch label="Re-enter when SuperTrend turns back" checked={cfg.trendReenterOnFlip} onChange={(v) => set({ trendReenterOnFlip: v })}
+          description={cfg.trendReenterOnFlip
+            ? `After SuperTrend flips a trade out, buy again when it turns back to the trade's colour, as long as the ${cfg.maFast} ${ma} is still on the same side of the ${cfg.maSlow} ${ma}. No new cross needed.`
+            : "Off: after a SuperTrend exit, wait for the next cross."} />
       </Step>
 
       <Step n={2} title="Direction and exit" text={`SuperTrend (ATR ${cfg.stPeriod}, × ${cfg.stMultiplier}) sets the direction. A position closes at the end of the candle where SuperTrend flips against it. Its line at entry is the initial stop used for sizing. Computed on every candle ${open}–${close}, like a chart.`}>
@@ -355,11 +359,18 @@ function TrendSteps({ cfg, set, open, close }: { cfg: StrategyConfig; set: (p: P
         </div>
       </Step>
 
-      <Step n={3} title="Holding" text={cfg.trendCloseEod
-        ? `Every trade is closed at the close of the day's last candle (${close}), even if SuperTrend hasn't flipped.`
-        : "Trades carry overnight until SuperTrend flips. Overnight gaps hit at the next candle's close."}>
-        <Segmented label="Hold" hideLabel value={cfg.trendCloseEod} onChange={(v) => set({ trendCloseEod: v })}
-          options={[{ value: false, label: "Until SuperTrend flips" }, { value: true, label: "Close at day end" }]} />
+      <Step n={3} title="Holding" text={!cfg.trendCloseEod
+        ? "Trades carry overnight until SuperTrend flips. Overnight gaps hit at the next candle's close."
+        : cfg.trendReenter
+        ? `Every trade is closed at the day's last candle (${close}). If SuperTrend is still the same colour when the next day's first candle closes, the trade is opened again there (with options, at a fresh strike from that price), with no new cross needed. No overnight risk, but every re-entry pays charges and slippage again.`
+        : `Every trade is closed at the close of the day's last candle (${close}), even if SuperTrend hasn't flipped.`}>
+        <Segmented label="Hold" hideLabel value={!cfg.trendCloseEod ? "flip" : cfg.trendReenter ? "reenter" : "eod"}
+          onChange={(v) => set({ trendCloseEod: v !== "flip", trendReenter: v === "reenter" })}
+          options={[
+            { value: "flip", label: "Until flip", hint: "Hold until SuperTrend flips, overnight included" },
+            { value: "eod", label: "Day end", hint: "Close at the day's last candle" },
+            { value: "reenter", label: "Re-enter", hint: "Close at day end; re-enter next morning if SuperTrend hasn't flipped" },
+          ]} />
         <Field label="No new entries after" hint={cfg.trendLastEntry
           ? `Crosses on candles starting at ${cfg.trendLastEntry} or later are ignored. Open trades still exit on SuperTrend.`
           : "Off: entries allowed on any candle."}>
