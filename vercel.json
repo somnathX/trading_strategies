@@ -1,0 +1,5 @@
+{
+  "buildCommand": "npm run build && npm run build:bot",
+  "regions": ["bom1"],
+  "functions": { "api/tick.js": { "maxDuration": 60 } }
+}

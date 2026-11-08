@@ -5,3 +5,8 @@ dist/
 .DS_Store
 # Old Python-era Dhan downloads, kept locally only
 data/cache/
+
+# Trading bot
+bot-dist/
+.bot-state.json*
+bot.log

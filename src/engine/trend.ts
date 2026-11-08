@@ -25,6 +25,22 @@ export function trendSeries(m: Market, cfg: StrategyConfig): TrendSeries {
   };
 }
 
+/** Candles to skip before trading: EMAs are seeded from the first candle, so give them a few periods to settle. */
+export const warmBars = (cfg: StrategyConfig) => Math.max(cfg.maSlow, cfg.stPeriod) * 3;
+
+/** Has SuperTrend flipped against an open position on bar k? */
+export const exitSignal = (s: TrendSeries, k: number, side: Side) => (side === "long" ? !s.st.up[k] : s.st.up[k]);
+
+/** New entry on bar k (index into s.bars), ignoring any open position and the end-of-day rule. Shared with the live bot. */
+export function entrySignal(m: Market, s: TrendSeries, cfg: StrategyConfig, k: number): Side | null {
+  const { fast, slow, st } = s;
+  if (k < 1 || k < warmBars(cfg)) return null;
+  if (cfg.trendLastEntry && m.minute[s.bars[k]] >= hmToMinutes(cfg.trendLastEntry)) return null;
+  const crossUp = fast[k - 1] <= slow[k - 1] && fast[k] > slow[k];
+  const crossDown = fast[k - 1] >= slow[k - 1] && fast[k] < slow[k];
+  return crossUp && st.up[k] ? "long" : crossDown && !st.up[k] ? "short" : null;
+}
+
 /**
  * MA cross + SuperTrend.
  *  - Long when the fast MA crosses above the slow MA on a candle where SuperTrend is green.
@@ -34,11 +50,9 @@ export function trendSeries(m: Market, cfg: StrategyConfig): TrendSeries {
  * Entries only on days >= fromDay (earlier candles just warm the indicators up).
  */
 export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): Trade[] {
-  const { bars, fast, slow, st } = trendSeries(m, cfg);
+  const series = trendSeries(m, cfg);
+  const { bars, st } = series;
   const { c, t } = m.c;
-  // EMAs are seeded from the first candle, so give them a few periods to settle.
-  const warm = Math.max(cfg.maSlow, cfg.stPeriod) * 3;
-  const cutoff = cfg.trendLastEntry ? hmToMinutes(cfg.trendLastEntry) : Infinity;
   const trades: Trade[] = [];
   let pos: { side: Side; k: number; price: number; stop: number } | null = null;
 
@@ -75,15 +89,12 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
     const lastOfDay = k === bars.length - 1 || m.day[bars[k + 1]] !== m.day[i];
 
     if (pos) {
-      const flipped = pos.side === "long" ? !st.up[k] : st.up[k];
-      if (flipped) close(k, "st_flip");
+      if (exitSignal(series, k, pos.side)) close(k, "st_flip");
       else if (cfg.trendCloseEod && lastOfDay) close(k, "eod");
     }
 
-    if (pos || k < warm || m.day[i] < fromDay || (cfg.trendCloseEod && lastOfDay) || m.minute[i] >= cutoff) continue;
-    const crossUp = fast[k - 1] <= slow[k - 1] && fast[k] > slow[k];
-    const crossDown = fast[k - 1] >= slow[k - 1] && fast[k] < slow[k];
-    const side: Side | null = crossUp && st.up[k] ? "long" : crossDown && !st.up[k] ? "short" : null;
+    if (pos || m.day[i] < fromDay || (cfg.trendCloseEod && lastOfDay)) continue;
+    const side = entrySignal(m, series, cfg, k);
     if (side) {
       const price = side === "long" ? c[i] + cfg.slippagePoints : c[i] - cfg.slippagePoints;
       pos = { side, k, price, stop: st.line[k] };

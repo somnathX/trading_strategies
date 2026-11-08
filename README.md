@@ -8,6 +8,8 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
+To run a strategy live or on paper through Dhan with Telegram alerts, see [BOT.md](BOT.md).
+
 ## What's in the app
 
 - **Strategy panel:** the strategy as eight plain-language steps (opening range, entry, confirmation,

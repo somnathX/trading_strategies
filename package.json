@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "fetch-data": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/fetch-data.ts",
     "fetch-us": "node --disable-warning=ExperimentalWarning scripts/fetch-us.ts",
-    "fetch-options": "node --disable-warning=ExperimentalWarning scripts/fetch-options.ts"
+    "fetch-options": "node --disable-warning=ExperimentalWarning scripts/fetch-options.ts",
+    "build:bot": "vite build --ssr src/bot/bot.ts --outDir bot-dist --emptyOutDir",
+    "bot": "node --env-file-if-exists=.env bot-dist/bot.js"
   },
   "dependencies": {
     "lightweight-charts": "^5.2.1",
