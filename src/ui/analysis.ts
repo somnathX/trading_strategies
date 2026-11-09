@@ -29,7 +29,11 @@ export function verdict(r: RunResult, symbol: string, capital: number, oosFrom: 
   const marginNote = s.skippedForMargin > 0
     ? `${s.skippedForMargin} signal${s.skippedForMargin > 1 ? "s were" : " was"} skipped because ${inrShort(capital)} can't cover the margin for even one lot. Raise the capital or lower the margin % under Position size.`
     : null;
+  const riskNote = s.skippedForRisk > 0
+    ? `${s.skippedForRisk} signal${s.skippedForRisk > 1 ? "s were" : " was"} skipped because even 1 lot would have risked more than your risk % (the stop was too far). Turn off "Skip trades over my risk" under Position size to take them with 1 lot.`
+    : null;
   if (s.trades === 0) {
+    if (riskNote && !marginNote) return { grade: "bad", label: "No trades", headline: "Every signal needed more risk than your % allows.", points: [{ tone: "bad", text: riskNote }] };
     return marginNote
       ? { grade: "bad", label: "No trades", headline: `Capital too small: ${inrShort(capital)} can't margin one lot.`, points: [{ tone: "bad", text: marginNote }] }
       : { grade: "bad", label: "No trades", headline: "No trades in this period.", points: [{ tone: "neutral", text: "Loosen the entry filters or widen the dates." }] };
@@ -73,6 +77,7 @@ export function verdict(r: RunResult, symbol: string, capital: number, oosFrom: 
   }
 
   if (marginNote) points.push({ tone: "warn", text: marginNote });
+  if (riskNote) points.push({ tone: "neutral", text: riskNote });
   if (s.trades < 30) points.push({ tone: "warn", text: `Only ${s.trades} trades: too few to tell skill from luck.` });
   if (s.maxDrawdownPct < -20 && s.ruinDay === null) {
     points.push({ tone: "warn", text: `The worst drawdown was ${pct(s.maxDrawdownPct)} (${inrShort(s.maxDrawdownInr)}) from a peak.` });

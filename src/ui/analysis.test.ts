@@ -7,7 +7,7 @@ import { bucket, histogram, verdict } from "./analysis";
 const summary = (o: Partial<Summary>): Summary => ({
   trades: 120, winRate: 50, netInr: 50_000, grossInr: 80_000, costsInr: 30_000, returnPct: 10, cagrPct: 5,
   sharpe: 1.4, maxDrawdownPct: -6, maxDrawdownInr: -30_000, profitFactor: 1.3, avgWinInr: 4000, avgLossInr: -3000,
-  expectancyInr: 400, avgPoints: 3, maxConsecLosses: 5, ruinDay: null, skippedForMargin: 0, ...o,
+  expectancyInr: 400, avgPoints: 3, maxConsecLosses: 5, ruinDay: null, skippedForMargin: 0, skippedForRisk: 0, ...o,
 });
 const days = [isoToDay("2025-01-01"), isoToDay("2025-12-31")];
 const evaluation = (s: Summary): Evaluation => ({

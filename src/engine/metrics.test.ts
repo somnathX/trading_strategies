@@ -31,6 +31,43 @@ describe("costs and sizing", () => {
     expect(Math.round(r.grossInr)).toBe(57_304); // 440.8 pts × 130, not ₹18 L
   });
 
+  it("can grow position size with profits (compounding), sizing each trade on the account value", () => {
+    // 1% risk, 10-pt stop: ₹5 L → 7 lots (5,000 / 650). A +2,000-pt winner first lifts the account well above ₹5 L.
+    const big = trade({ stopPrice: 24990, exitPrice: 27000, pnlPoints: 2000, exitTime: at("2026-01-05") + 3600 });
+    const next = trade({ stopPrice: 24990, entryTime: at("2026-01-06"), exitTime: at("2026-01-06") + 3600, sessionDate: "2026-01-06" });
+    const a = { ...DEFAULT_ACCOUNT, marginPct: 1 }; // so margin doesn't cap the size
+    const days = [isoToDay("2026-01-05"), isoToDay("2026-01-06")];
+    const fixed = evaluate([big, next], days, 65, a).rows;
+    const grown = evaluate([big, next], days, 65, { ...a, compound: true }).rows;
+    expect(fixed.map((r) => r.lots)).toEqual([7, 7]);
+    expect(grown[0].lots).toBe(7);
+    const value = 500_000 + grown[0].netInr;
+    expect(grown[1].lots).toBe(Math.floor((value * 0.01) / 650)); // sized on the grown account
+    expect(grown[1].lots).toBeGreaterThan(7);
+  });
+
+  it("can size the starting capital and the profits as two pots at different risk %", () => {
+    // Capital ₹5 L at 1% (7 lots on a 10-pt stop) plus profits at 2%, added together.
+    const big = trade({ stopPrice: 24990, exitPrice: 27000, pnlPoints: 2000, exitTime: at("2026-01-05") + 3600 });
+    const next = trade({ stopPrice: 24990, entryTime: at("2026-01-06"), exitTime: at("2026-01-06") + 3600, sessionDate: "2026-01-06" });
+    const a = { ...DEFAULT_ACCOUNT, marginPct: 1, compound: true, profitRiskPct: 2 };
+    const rows = evaluate([big, next], [isoToDay("2026-01-05"), isoToDay("2026-01-06")], 65, a).rows;
+    expect(rows[0].lots).toBe(7); // no profit yet: just the capital pot
+    const profit = rows[0].netInr;
+    expect(rows[1].lots).toBe(7 + Math.floor((profit * 0.02) / 650));
+  });
+
+  it("can skip signals where even one lot would risk more than the risk %", () => {
+    // 100-pt stop × 65 = ₹6,500 per lot > ₹5,000 (1% of ₹5 L): normally 1 lot anyway, skipped when asked.
+    const wide = trade({ stopPrice: 24900 });
+    expect(sizeAndCost(wide, 65, DEFAULT_ACCOUNT).lots).toBe(1);
+    const a = { ...DEFAULT_ACCOUNT, skipOverRisk: true };
+    expect(sizeAndCost(wide, 65, a).lots).toBe(0);
+    expect(sizeAndCost(trade({}), 65, a).lots).toBe(1); // 50-pt stop: ₹3,250 fits
+    const e = evaluate([wide, trade({})], [isoToDay("2026-01-05")], 65, a);
+    expect([e.summary.trades, e.summary.skippedForRisk, e.summary.skippedForMargin]).toEqual([1, 1, 0]);
+  });
+
   it("skips signals the capital can't margin even one lot for", () => {
     // ₹1 L capital vs ₹25,000 × 65 × 12% = ₹1.95 L margin per lot.
     const a = { ...DEFAULT_ACCOUNT, capital: 100_000 };

@@ -229,9 +229,29 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
           ? <>
               <Segmented label="Risk per trade" value={account.riskPct} onChange={(v) => setAcc({ riskPct: v })}
                 options={[0.5, 1, 2, 3, 5, 10].map((x) => ({ value: x, label: `${x}%` }))} />
-              <Field label="Or any %" hint={`${cur()}${group(riskInr)} of ${cur()}${group(account.capital)} per trade. Still capped by margin.`}>
+              <Field label="Or any %" hint={account.compound && account.profitRiskPct
+                ? `${cur()}${group(riskInr)} of the starting ${cur()}${group(account.capital)} per trade, plus ${account.profitRiskPct}% of the profit so far. Still capped by margin.`
+                : account.compound
+                ? `${account.riskPct}% of the account value at each entry (${cur()}${group(riskInr)} to start). Still capped by margin.`
+                : `${cur()}${group(riskInr)} of ${cur()}${group(account.capital)} per trade. Still capped by margin.`}>
                 <Num value={account.riskPct} min={0.1} max={100} step={0.5} suffix="%" onChange={(v) => v > 0 && setAcc({ riskPct: v })} />
               </Field>
+              <Switch label="Skip trades over my risk" checked={!!account.skipOverRisk} onChange={(v) => setAcc({ skipOverRisk: v })}
+                description={account.skipOverRisk
+                  ? `A signal is skipped when even 1 ${usd ? "contract" : "lot"} would lose more than ${account.riskPct}% if the stop is hit (a wide stop).`
+                  : `Off: when 1 ${usd ? "contract" : "lot"} risks more than ${account.riskPct}%, it still trades 1 ${usd ? "contract" : "lot"}.`} />
+              <Switch label="Grow capital with profits" checked={!!account.compound} onChange={(v) => setAcc({ compound: v })}
+                description={!account.compound
+                  ? `Off: every trade is sized on the starting ${cur()}${group(account.capital)}; profits aren't reinvested.`
+                  : account.profitRiskPct
+                  ? `Two pots: the starting ${cur()}${group(account.capital)} always at ${account.riskPct}%, plus the profit made so far at ${account.profitRiskPct}%. The lots are added together, capped by what the account can margin.`
+                  : "Each trade is sized on the starting capital plus all profit and loss so far: trades grow after wins and shrink after losses."} />
+              {account.compound && (
+                <Field label="Risk on profits" hint={account.profitRiskPct ? `Profits sized separately at ${account.profitRiskPct}%.` : "Off: the whole account (capital + profits) at the risk % above."}
+                  info="Size the starting capital and the profits as two separate pots. Example: capital at 10% and profits at 2%. 0 turns it off.">
+                  <Num value={account.profitRiskPct ?? 0} min={0} max={100} step={0.5} suffix="%" onChange={(v) => setAcc({ profitRiskPct: v })} />
+                </Field>
+              )}
             </>
           : <Field label={usd ? "Contracts" : "Lots"}><Num value={account.fixedLots} min={1} step={1} onChange={(v) => setAcc({ fixedLots: v })} /></Field>}
         {!(opt && step) && <Field label={usd ? "Margin per contract" : "Margin per lot"} info={usd ? "Initial margin per futures contract, as % of its value (index × $ per point). MES and ES are roughly 6–9%. Positions are capped at what the capital can cover." : sell ? "Margin your broker blocks per sold option lot, as % of the index value (index × lot size). A naked Nifty option is roughly 10–13%, like a future. Positions are capped at what the capital can cover." : "Margin your broker blocks per futures lot, as % of the contract value (price × lot size). Nifty is roughly 10–13%. Positions are capped at what the capital can cover."}>

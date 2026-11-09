@@ -41,7 +41,7 @@ export function Help({ open, onClose }: { open: boolean; onClose: () => void }) 
           <li>Entries fill at the signal candle's close plus slippage. Stops and targets are checked from the next candle on.</li>
           <li>If a candle touches both the stop and a target, the stop is assumed to come first. Gaps through the stop fill at the open.</li>
           <li>Opening-range trades are closed by 15:00. MA cross + SuperTrend uses every candle of the session (09:15–15:30 on NSE, 09:30–16:00 New York time for SPX), as a chart does, holds overnight until SuperTrend flips unless set to close at day end, and warms its indicators up on history before the test period. It doesn't model rolling futures at expiry.</li>
-          <li>Sizing is on starting capital (no compounding).</li>
+          <li>Sizing is on starting capital (no compounding), unless "Grow capital with profits" is on under Position size; then each trade is sized on the account value when it opens.</li>
           <li>Costs: slippage both ways, brokerage per order, STT on the sell side, exchange and SEBI fees, stamp duty on the buy side, GST.</li>
         </ul>
 

@@ -20,9 +20,10 @@ interface Props {
   capital: number;
   oosFrom: string | null;
   splitDay: number | null;
+  compound: boolean; // sizing grows with profits: monthly % is of the account value at the time
 }
 
-export function Overview({ result, prev, symbol, capital, oosFrom, splitDay }: Props) {
+export function Overview({ result, prev, symbol, capital, oosFrom, splitDay, compound }: Props) {
   const { all, inSample, outOfSample, benchmark } = result;
   const v = useMemo(() => verdict(result, symbol, capital, oosFrom), [result, symbol, capital, oosFrom]);
   const series = useMemo<ChartSeries[]>(() => [
@@ -68,7 +69,7 @@ export function Overview({ result, prev, symbol, capital, oosFrom, splitDay }: P
       {inSample && outOfSample && <SplitTable inSample={inSample} outOfSample={outOfSample} oosFrom={oosFrom!} />}
 
       <section className="card" aria-labelledby="monthly-h">
-        <MonthlyTable rows={all.rows} capital={capital} />
+        <MonthlyTable rows={all.rows} capital={capital} compound={compound} />
       </section>
     </div>
   );
@@ -177,7 +178,7 @@ const cellInr = (x: number) => {
 };
 
 /** Month-by-year table of the run, by the month each trade closed, in whichever measure is picked. */
-function MonthlyTable({ rows, capital }: { rows: Evaluation["rows"]; capital: number }) {
+function MonthlyTable({ rows, capital, compound }: { rows: Evaluation["rows"]; capital: number; compound: boolean }) {
   const [view, setView] = useState<MonthView>(() => load<MonthView>(VIEW_KEY, "pct"));
   const pick = (v: MonthView) => { setView(v); save(VIEW_KEY, v); };
   const byMonth = useMemo(() => {
@@ -191,11 +192,19 @@ function MonthlyTable({ rows, capital }: { rows: Evaluation["rows"]; capital: nu
     return out;
   }, [rows]);
   type M = { net: number; gross: number; costs: number; trades: number; wins: number };
-  const value = (m: M) => ({ pct: (m.net / capital) * 100, net: m.net, gross: m.gross, costs: m.costs, trades: m.trades, win: m.trades ? (m.wins / m.trades) * 100 : 0 })[view];
+  // % of the starting capital, or (compounding) of the account value at the start of that month.
+  const startOf = useMemo(() => {
+    const out = new Map<string, number>();
+    let value = capital;
+    for (const k of [...byMonth.keys()].sort()) { out.set(k, value); value += byMonth.get(k)!.net; }
+    return out;
+  }, [byMonth, capital]);
+  const base = (k: string | null) => (compound && k && startOf.get(k)! > 0 ? startOf.get(k)! : capital);
+  const value = (m: M, k: string | null = null) => ({ pct: (m.net / base(k)) * 100, net: m.net, gross: m.gross, costs: m.costs, trades: m.trades, win: m.trades ? (m.wins / m.trades) * 100 : 0 })[view];
   const fmt = (v: number, total = false) => view === "pct" ? (total ? pct(v) : num(v, 1))
     : view === "trades" ? String(v) : view === "win" ? `${Math.round(v)}%` : total ? inrShort(v) : cellInr(v);
   // Colour: profit green / loss red; costs always red; win rate around 50%; trade counts uncoloured.
-  const vals = [...byMonth.values()].map(value);
+  const vals = [...byMonth.entries()].map(([k, m]) => value(m, k));
   const max = Math.max(1e-9, ...vals.map(Math.abs));
   const shade = (v: number) => view === "trades" ? undefined : view === "win" ? heatStyle((v - 50) / 50)
     : view === "costs" ? heatStyle(-v / max) : heatStyle(v / max);
@@ -206,6 +215,7 @@ function MonthlyTable({ rows, capital }: { rows: Evaluation["rows"]; capital: nu
   const up = months.filter(([, m]) => m.net > 0).length;
   const best = months.reduce<[string, M] | null>((b, e) => (!b || e[1].net > b[1].net ? e : b), null);
   const worst = months.reduce<[string, M] | null>((b, e) => (!b || e[1].net < b[1].net ? e : b), null);
+  const mk = (y: string, i: number) => `${y}-${String(i + 1).padStart(2, "0")}`;
   const label = (k: string) => `${MONTHS[Number(k.slice(5)) - 1]} ${k.slice(0, 4)}`;
   return (
     <>
@@ -229,13 +239,13 @@ function MonthlyTable({ rows, capital }: { rows: Evaluation["rows"]; capital: nu
           <tbody>
             {years.map((y) => {
               const ms = MONTHS.map((_, i) => byMonth.get(`${y}-${String(i + 1).padStart(2, "0")}`));
-              const total = value(sum(ms.filter((m): m is M => !!m)));
+              const total = value(sum(ms.filter((m): m is M => !!m)), [...startOf.keys()].find((k) => k.startsWith(y)) ?? null); // compounding: of the year's start
               return (
                 <tr key={y}>
                   <th scope="row">{y}</th>
                   {ms.map((m, i) => m === undefined
                     ? <td key={i} className="num muted" />
-                    : <td key={i} className="num" style={shade(value(m))}>{fmt(value(m))}</td>)}
+                    : <td key={i} className="num" style={shade(value(m, mk(y, i)))}>{fmt(value(m, mk(y, i)))}</td>)}
                   <td className={`num strong ${view === "trades" ? "" : view === "win" ? tone(total - 50) : view === "costs" ? "neg" : tone(total)}`}>{fmt(total, true)}</td>
                 </tr>
               );

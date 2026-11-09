@@ -2,7 +2,11 @@ import { dayOf, dayToISO } from "./market";
 import type { Trade } from "./types";
 
 export interface AccountConfig {
-  capital: number; // ₹, fixed (no compounding): sizing and returns are on starting capital
+  capital: number; // ₹ starting capital: sizing and returns are on it, unless `compound`
+  skipOverRisk?: boolean; // with % risk sizing: skip a trade when even 1 lot would risk more than riskPct (instead of taking 1 lot)
+  compound?: boolean; // with % risk sizing: size on the current account value (starting capital + closed P&L) instead
+  profitRiskPct?: number; // with compound: keep sizing the starting capital at riskPct and size the profits so far
+  // separately at this % (the two sizes are added). 0/unset = the whole account at riskPct.
   sizing: "risk" | "fixed";
   riskPct: number; // % of capital risked per trade (entry to stop) when sizing = risk
   marginPct: number; // margin blocked per lot, % of contract value: caps how many lots capital can hold
@@ -73,6 +77,7 @@ export interface TradeRow extends Trade {
   riskInr: number;
   wantedLots: number; // what the sizing rule asked for, before the margin cap
   marginCapped: boolean; // true when capital's margin limited the size
+  overRisk?: boolean; // skipped (0 lots): one lot would risk more than the risk % allows
   grossInr: number; // pnlPoints * qty
   costsInr: number; // exit slippage + charges
   netInr: number;
@@ -97,10 +102,11 @@ export interface Summary {
   maxConsecLosses: number;
   ruinDay: number | null; // first session the account was at or below zero
   skippedForMargin: number; // signals not taken: capital couldn't margin even one lot
+  skippedForRisk: number; // signals not taken: one lot would risk more than the risk % (skipOverRisk)
 }
 
 /** Summary fields that are plain numbers (everything you can rank or sweep on). */
-export type MetricKey = Exclude<keyof Summary, "ruinDay" | "skippedForMargin">;
+export type MetricKey = Exclude<keyof Summary, "ruinDay" | "skippedForMargin" | "skippedForRisk">;
 
 export interface EquityPoint {
   day: number;
@@ -123,18 +129,22 @@ export function maxLotsByMargin(price: number, lotSize: number, a: AccountConfig
   return perLot > 0 ? Math.floor(a.capital / perLot) : Infinity;
 }
 
+/** Points per unit lost if the stop is hit: premium points for options, index points otherwise. */
+const stopPoints = (t: Trade) => (t.option ? Math.abs(t.option.entry - t.option.stop) : Math.abs(t.entryPrice - t.stopPrice));
+
 export function sizeAndCost(t: Trade, lotSize: number, a: AccountConfig): TradeRow {
   // With options, everything below is in premium: bought options are long the premium, sold ones short it.
   const o = t.option;
   const entry = o ? o.entry : t.entryPrice;
-  const stopPts = o ? Math.abs(o.entry - o.stop) : Math.abs(t.entryPrice - t.stopPrice);
+  const stopPts = stopPoints(t);
   const wantedLots =
     a.sizing === "fixed" || stopPts <= 0
       ? Math.max(1, Math.floor(a.fixedLots))
       : Math.max(1, Math.floor((a.capital * a.riskPct) / 100 / (stopPts * lotSize)));
+  const overRisk = !!a.skipOverRisk && a.sizing === "risk" && stopPts * lotSize > (a.capital * a.riskPct) / 100;
   // A very tight stop would otherwise ask for more lots than the capital could ever margin.
   // A sold option blocks margin on the index like a future; a bought one costs its premium; spreads say what they block.
-  const lots = Math.min(wantedLots, o?.margin
+  const lots = overRisk ? 0 : Math.min(wantedLots, o?.margin
     ? maxLotsByMargin(o.margin, lotSize, { ...a, marginPct: 100 })
     : maxLotsByMargin(o?.sell ? t.entryPrice : entry, lotSize, a));
   const qty = lots * lotSize;
@@ -153,19 +163,48 @@ export function sizeAndCost(t: Trade, lotSize: number, a: AccountConfig): TradeR
     + ((brokerage + exchange + sebi) * a.gstPct) / 100 + (a.feePerLot ?? 0) * lots * (1 + fills);
   const grossInr = (o ? o.pnl : t.pnlPoints) * qty;
   const costsInr = a.exitSlippagePoints * qty + charges;
-  return { ...t, lots, qty, riskInr: stopPts * qty, wantedLots, marginCapped: lots < wantedLots, grossInr, costsInr, netInr: grossInr - costsInr };
+  return { ...t, lots, qty, riskInr: stopPts * qty, wantedLots, marginCapped: !overRisk && lots < wantedLots, grossInr, costsInr, netInr: grossInr - costsInr, ...(overRisk && { overRisk }) };
 }
 
 const sum = (xs: number[]) => xs.reduce((s, x) => s + x, 0);
+
+/**
+ * Size each trade on the account value when it opens: starting capital plus everything closed before it.
+ * Profits grow the next trades, losses shrink them; once the account is gone, nothing more is traded.
+ * With profitRiskPct, two pots instead: the starting capital at riskPct (as with fixed sizing) plus the profit so far
+ * at profitRiskPct, added together and capped by what the whole account can margin.
+ */
+function sizeCompounding(trades: Trade[], lotSize: number, a: AccountConfig): TradeRow[] {
+  const closed: { at: number; net: number }[] = [];
+  const twoPots = (a.profitRiskPct ?? 0) > 0;
+  const size = (t: Trade, value: number): TradeRow => {
+    if (!twoPots) return sizeAndCost(t, lotSize, { ...a, capital: value });
+    const base = sizeAndCost(t, lotSize, a); // the starting capital, as if nothing had been made or lost
+    const profit = value - a.capital;
+    const extra = profit > 0 && stopPoints(t) > 0 ? Math.floor((profit * a.profitRiskPct!) / 100 / (stopPoints(t) * lotSize)) : 0;
+    const lots = base.lots + extra;
+    if (lots === 0) return base;
+    const row = sizeAndCost(t, lotSize, { ...a, sizing: "fixed", fixedLots: lots, capital: value });
+    return { ...row, wantedLots: base.wantedLots + extra, marginCapped: row.lots < lots };
+  };
+  return trades.map((t) => {
+    const value = a.capital + sum(closed.filter((c) => c.at <= t.entryTime).map((c) => c.net));
+    const row = value > 0 ? size(t, value) : { ...sizeAndCost(t, lotSize, a), lots: 0, netInr: 0 };
+    if (row.lots > 0) closed.push({ at: t.exitTime, net: row.netInr });
+    return row;
+  });
+}
 
 /**
  * ₹ results for trades over the sessions `days` (sorted IST day numbers in the test window;
  * days without trades count as flat days for Sharpe and drawdown).
  */
 export function evaluate(trades: Trade[], days: number[], lotSize: number, a: AccountConfig): Evaluation {
-  const sized = trades.map((t) => sizeAndCost(t, lotSize, a));
+  const grow = a.compound && a.sizing === "risk"; // fixed lots stay fixed
+  const sized = grow ? sizeCompounding(trades, lotSize, a) : trades.map((t) => sizeAndCost(t, lotSize, a));
   const rows = sized.filter((r) => r.lots > 0);
-  const skippedForMargin = sized.length - rows.length;
+  const skippedForRisk = sized.filter((r) => r.overRisk).length;
+  const skippedForMargin = sized.length - rows.length - skippedForRisk;
   const byDay = new Map<number, number>();
   const grossByDay = new Map<number, number>();
   for (const r of rows) {
@@ -185,9 +224,10 @@ export function evaluate(trades: Trade[], days: number[], lotSize: number, a: Ac
   let ruinDay: number | null = null;
   for (const d of days) {
     const pnl = byDay.get(d) ?? 0;
-    // Sizing is on fixed starting capital, so returns are too (and they can't flip sign
-    // when equity goes negative, which dividing by current equity would do).
-    returns.push(pnl / a.capital);
+    // Returns are on what the sizing used: fixed starting capital, or (compounding) the account value at the
+    // day's start. Fixed sizing can't flip sign when equity goes negative, which dividing by equity would.
+    const base = grow && eq > 0 ? eq : a.capital;
+    returns.push(pnl / base);
     eq += pnl;
     if (eq <= 0 && ruinDay === null) ruinDay = d;
     peak = Math.max(peak, eq);
@@ -197,7 +237,7 @@ export function evaluate(trades: Trade[], days: number[], lotSize: number, a: Ac
     grossEq += grossByDay.get(d) ?? 0;
     equity.push({ day: d, equity: eq, grossEquity: grossEq, pnl, drawdownPct: ddPct });
     const month = dayToISO(d).slice(0, 7);
-    monthly[month] = (monthly[month] ?? 0) + (pnl / a.capital) * 100;
+    monthly[month] = (monthly[month] ?? 0) + (pnl / base) * 100;
   }
 
   const wins = rows.filter((r) => r.netInr > 0).map((r) => r.netInr);
@@ -237,6 +277,7 @@ export function evaluate(trades: Trade[], days: number[], lotSize: number, a: Ac
       maxConsecLosses,
       ruinDay,
       skippedForMargin,
+      skippedForRisk,
     },
   };
 }

@@ -304,7 +304,7 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
         <div id="panel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="content" aria-busy={busy} tabIndex={-1}>
           {!result && !runError && <p className="empty">Running backtest…</p>}
           {result && tab === "overview" && (
-            <Overview result={result} prev={prevSummary} symbol={file.symbol} capital={account.capital}
+            <Overview result={result} prev={prevSummary} symbol={file.symbol} capital={account.capital} compound={!!account.compound && account.sizing === "risk"}
               oosFrom={settings.oosEnabled ? settings.oosFrom : null} splitDay={splitDay} />
           )}
           {result && tab === "trades" && <Trades rows={result.all.rows} market={market} focusDay={focusDay} cfg={settings.cfg} />}
