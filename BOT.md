@@ -26,7 +26,9 @@ Every order carries a correlation id, so if the bot restarts mid-order it picks 
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DHAN_CLIENT_ID`, `DHAN_ACCESS_TOKEN` | required | From web.dhan.co → DhanHQ Trading APIs. The Data API plan is needed for candles and the option chain |
+| `DHAN_CLIENT_ID` | required | From web.dhan.co → DhanHQ Trading APIs. The Data API plan is needed for candles and the option chain |
+| `DHAN_PIN`, `DHAN_TOTP_SECRET` | recommended | Your Dhan PIN and TOTP secret key (see `.env.example`). The bot makes its own 24 h tokens, so you never paste one |
+| `DHAN_ACCESS_TOKEN` | if no TOTP | A token pasted from web.dhan.co; expires after 24 hours |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | optional | Alerts. Without them, messages only go to the log |
 | `BOT_MODE` | `paper` | `live` sends real orders |
 | `BOT_PRESET` | `top-10` | Any MA + SuperTrend preset id from `src/ui/presets.ts` |
@@ -59,7 +61,7 @@ Vercel can't place live orders, because Dhan only accepts orders from a static I
 
 1. Import this repo into Vercel. `vercel.json` already builds the bot and sets up `api/tick`.
 2. Add **Upstash for Redis** from the Vercel Marketplace (the free plan is enough) and connect it to the project. That adds the `KV_REST_API_*` variables.
-3. Add these environment variables: `DHAN_CLIENT_ID`, `DHAN_ACCESS_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `BOT_SECRET` (any long random string). Redeploy.
+3. Add these environment variables: `DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `BOT_SECRET` (any long random string). Redeploy.
 4. Vercel's free cron runs only once a day, so use **cron-job.org** (free) instead. Create a job:
    - **URL:** `https://<your-app>.vercel.app/api/tick`
    - **Schedule:** minutes `1,16,31,46`, hours `9–15`, Mon–Fri, timezone Asia/Kolkata. Runs outside market hours exit immediately.
@@ -93,7 +95,7 @@ cd ~/trading_strategies && git pull && npm ci && npm run build:bot
 
 ## Things to know
 
-- **Your access token expires.** The bot reads its expiry date and warns you two days ahead in the morning message. Every authentication failure also triggers an alert. Make a new token on web.dhan.co and update `.env` (or the Vercel env var).
+- **Access tokens last 24 hours.** With `DHAN_PIN` and `DHAN_TOTP_SECRET` set, the bot makes a new one when the old one has under an hour left, or when Dhan rejects it, and keeps it in its state (so `.bot-state.json` / the Upstash key holds a live token: keep them private). Without TOTP, it warns you in the morning message when the pasted token is about to expire; make a new one on web.dhan.co and update `.env` (or the Vercel env var).
 - **Signals on the last candle (15:15–15:30)** can't be traded the same day, so the bot acts on them at 09:16 the next morning. The backtest assumes a fill at the 15:30 close, so overnight gaps make live results differ from it.
 - **Pausing:** set `BOT_PAUSED=1` to stop new actions. The bot also pauses itself when Dhan's position doesn't match its own record. After you've fixed things, remove the `"paused"` line from `.bot-state.json` (or the Upstash key `bot-state`).
 - **Charges** aren't included in the P&L shown in Telegram.

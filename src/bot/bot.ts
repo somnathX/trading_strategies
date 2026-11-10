@@ -15,6 +15,7 @@ import { buildMarket, dayOf, dayToISO, isoToDay, minuteOf } from "../engine/mark
 import { entrySignal, exitSignal, trendSeries } from "../engine/trend";
 import { DEFAULT_CONFIG, type Candles, type Side, type StrategyConfig } from "../engine/types";
 import { PRESETS } from "../ui/presets";
+import { canGenerate, dhanToken, generateToken, tokenSecondsLeft } from "../dhanAuth";
 
 type Env = Record<string, string | undefined>;
 
@@ -39,6 +40,7 @@ export interface State {
   pnl?: number; // ₹, closed trades, before charges
   trades?: number;
   heartbeat?: string; // day of the last "bot is running" message
+  dhanToken?: string; // last token made via TOTP, reused until it nears expiry
 }
 
 interface Quote { securityId: string; bid: number; ask: number; ltp: number; spot: number }
@@ -87,22 +89,27 @@ export const itmStrike = (type: "CE" | "PE", spot: number, step: number, n: numb
 
 // ---------- Dhan ----------
 
-function dhanClient(env: Env) {
-  const { DHAN_CLIENT_ID: id, DHAN_ACCESS_TOKEN: token } = env;
-  if (!id || !token) throw new Error("Set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN");
+function dhanClient(env: Env, token: string) {
+  const id = env.DHAN_CLIENT_ID;
+  if (!id) throw new Error("Set DHAN_CLIENT_ID");
   let lastChain = 0;
 
-  async function call<T = any>(method: string, path: string, body?: unknown): Promise<T> {
+  async function call<T = any>(method: string, path: string, body?: unknown, retried = false): Promise<T> {
     const res = await fetch(API + path, {
       method,
-      headers: { "access-token": token!, "client-id": id!, "Content-Type": "application/json", Accept: "application/json" },
+      headers: { "access-token": token, "client-id": id!, "Content-Type": "application/json", Accept: "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await res.text();
     let j: any = text;
     try { j = JSON.parse(text); } catch { /* not JSON */ }
     if (!res.ok) {
-      const hint = res.status === 401 || /DH-90[16]|Authentication Failed/.test(text) ? " (access token expired or invalid: make a new one on web.dhan.co)" : "";
+      const authFail = res.status === 401 || /DH-90[16]|Authentication Failed/.test(text);
+      if (authFail && !retried && canGenerate(env)) { // e.g. fetch-data made a newer token: make another and retry once
+        token = await generateToken(env);
+        return call<T>(method, path, body, true);
+      }
+      const hint = authFail ? (canGenerate(env) ? " (token rejected even after making a new one: check DHAN_PIN / DHAN_TOTP_SECRET)" : " (access token expired or invalid: make a new one on web.dhan.co, or set DHAN_PIN and DHAN_TOTP_SECRET)") : "";
       throw new Error(`Dhan ${method} ${path}: HTTP ${res.status} ${j?.errorCode ?? ""} ${j?.errorMessage ?? text.slice(0, 200)}${hint}`);
     }
     return j as T;
@@ -118,7 +125,7 @@ function dhanClient(env: Env) {
 
   return {
     id,
-    token,
+    get token() { return token; },
     call,
     async candles(interval: number, now: number): Promise<Candles> {
       const iso = (t: number) => dayToISO(dayOf(t));
@@ -237,14 +244,6 @@ export function makeStore(env: Env): Store {
 
 // ---------- the tick ----------
 
-/** Days left on the Dhan token, from its JWT expiry (null if it can't be read). */
-function tokenDaysLeft(token: string): number | null {
-  try {
-    const exp = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).exp;
-    return typeof exp === "number" ? (exp - Date.now() / 1000) / 86400 : null;
-  } catch { return null; }
-}
-
 export async function tick(env: Env, now = Date.now() / 1000): Promise<string> {
   const s = settings(env);
   const store = makeStore(env);
@@ -257,12 +256,17 @@ export async function tick(env: Env, now = Date.now() / 1000): Promise<string> {
   if (dow === 0 || dow === 6 || minute < 9 * 60 + 16 || minute >= 15 * 60 + 29) return "Market closed; nothing to do";
   if (env.BOT_PAUSED || state.paused) return `Paused: ${env.BOT_PAUSED ? "BOT_PAUSED is set" : state.paused}`;
 
-  const dhan = dhanClient(env);
-  const save = () => store.save(state);
+  const auto = canGenerate(env);
+  const dhan = dhanClient(env, await dhanToken(env, (auto && state.dhanToken) || env.DHAN_ACCESS_TOKEN));
+  const save = () => {
+    if (auto) state.dhanToken = dhan.token;
+    return store.save(state);
+  };
 
   if (state.heartbeat !== today) { // first tick of the day: show it's alive
     state.heartbeat = today;
-    const days = tokenDaysLeft(dhan.token);
+    const left = auto ? null : tokenSecondsLeft(dhan.token);
+    const days = left === null ? null : left / 86400;
     const pos = state.pos ? `holding ${optName(state.pos)} × ${state.pos.qty}, bought at ₹${state.pos.entry}` : "no position";
     await notify(env, `🤖 Bot running (${mode}) · ${s.preset.name}\n${pos}\nClosed trades: ${state.trades ?? 0}, P&L ${rs(state.pnl ?? 0)} before charges`
       + (days !== null && days < 2 ? `\n⚠️ Dhan access token expires in ${Math.max(0, days * 24).toFixed(0)} h. Make a new one on web.dhan.co.` : ""));

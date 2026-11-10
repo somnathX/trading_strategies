@@ -16,7 +16,7 @@ The Oracle account exists. The VM isn't created yet.
 **After it's running:**
 - [ ] Make the public IP **reserved** (instance → VNIC → IPv4 addresses → edit → Reserved public IP)
 - [ ] Register that IP as the static IP at web.dhan.co → DhanHQ Trading APIs
-- [ ] Generate a fresh Dhan access token (the one in `.env` has expired)
+- [ ] Turn on TOTP in Dhan and put `DHAN_PIN` and `DHAN_TOTP_SECRET` in `.env` (no more daily tokens)
 - [ ] Create a Telegram bot with @BotFather and get the chat id (BOT.md §1)
 - [ ] Send Claude the public IP and the private key path. It will install Node, build the bot, set IST timezone and cron, and start in paper mode
 - [ ] Run in paper mode for a while, then switch to `BOT_MODE=live` with `LOTS=1`

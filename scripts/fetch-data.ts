@@ -4,12 +4,14 @@
  *   npm run fetch-data                      update every file listed in public/data/index.json
  *   npm run fetch-data -- NIFTY SBIN:15     add or update symbols (interval defaults to 5)
  *   npm run fetch-data -- SBIN --from 2024-01-01
+ *   npm run fetch-data -- CRUDEOIL:15       MCX crude oil (front-month future; also CRUDEOILM)
  *
- * Needs DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN (in .env) with Dhan's Data API enabled.
+ * Needs DHAN_CLIENT_ID plus DHAN_PIN + DHAN_TOTP_SECRET (or DHAN_ACCESS_TOKEN) in .env, with Dhan's Data API enabled.
  */
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { dhanToken } from "../src/dhanAuth.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DATA = join(ROOT, "public", "data");
@@ -17,6 +19,11 @@ const MASTER = join(ROOT, ".cache", "dhan-scrip-master.csv");
 const MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv";
 const API = "https://api.dhan.co/v2/charts/intraday";
 const INDICES = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
+// MCX futures: units per lot (Dhan's LOT_SIZE is 1 here, prices are per barrel).
+const COMMODITIES: Record<string, number> = { CRUDEOIL: 100, CRUDEOILM: 10 };
+const ROLL_DAYS = 3; // switch to the next contract this many days before expiry
+// MCX trades 09:00–23:30, or 23:55 when the US is off daylight saving.
+const MCX_SESSION = { open: 9 * 60, orbClose: 23 * 60, close: 23 * 60 + 55 };
 const CHUNK_DAYS = 90; // Dhan's max range per intraday request
 const IST = 19800;
 
@@ -27,7 +34,9 @@ interface Meta {
   securityId: string;
   segment: string;
   instrument: string;
-  kind: "index" | "equity";
+  kind: "index" | "equity" | "future";
+  session?: typeof MCX_SESSION;
+  contract?: string;
 }
 interface CandleFile extends Meta {
   t: number[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[];
@@ -77,6 +86,20 @@ async function scripMaster(): Promise<Record<string, string>[]> {
 }
 
 function lookup(rows: Record<string, string>[], symbol: string, interval: number): Meta {
+  if (COMMODITIES[symbol]) {
+    // ponytail: candles come from whichever contract is front month when fetched, so the file is
+    // spliced at each roll with no price adjustment (a small jump of the month-to-month spread).
+    const cutoff = addDays(istDate(Date.now() / 1000), ROLL_DAYS);
+    const fut = rows
+      .filter((r) => r.EXCH_ID === "MCX" && r.INSTRUMENT === "FUTCOM" && r.UNDERLYING_SYMBOL === symbol && r.SM_EXPIRY_DATE > cutoff)
+      .sort((a, b) => a.SM_EXPIRY_DATE.localeCompare(b.SM_EXPIRY_DATE))[0];
+    if (!fut) throw new Error(`${symbol}: no MCX future in the Dhan scrip master`);
+    console.log(`  using ${fut.DISPLAY_NAME} (expires ${fut.SM_EXPIRY_DATE})`);
+    return {
+      symbol, interval, lotSize: COMMODITIES[symbol], securityId: fut.SECURITY_ID, segment: "MCX_COMM", instrument: "FUTCOM",
+      kind: "future", session: MCX_SESSION, contract: `${COMMODITIES[symbol]} bbl lot`,
+    };
+  }
   const isIndex = INDICES.includes(symbol);
   const spot = rows.find((r) => r.EXCH_ID === "NSE" && r.UNDERLYING_SYMBOL === symbol && (isIndex
     ? r.SEGMENT === "I" && r.INSTRUMENT === "INDEX"
@@ -103,7 +126,7 @@ function lookup(rows: Record<string, string>[], symbol: string, interval: number
 async function fetchChunk(meta: Meta, from: string, to: string) {
   const { DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN } = process.env;
   if (!DHAN_CLIENT_ID || !DHAN_ACCESS_TOKEN) {
-    throw new Error("Set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN in .env (web.dhan.co → My Profile → DhanHQ Trading APIs).");
+    throw new Error("Set DHAN_CLIENT_ID and DHAN_PIN + DHAN_TOTP_SECRET (or DHAN_ACCESS_TOKEN) in .env; see .env.example.");
   }
   const res = await fetch(API, {
     method: "POST",
@@ -114,8 +137,8 @@ async function fetchChunk(meta: Meta, from: string, to: string) {
       instrument: meta.instrument,
       interval: String(meta.interval),
       oi: false,
-      fromDate: `${from} 09:15:00`,
-      toDate: `${to} 15:30:00`,
+      fromDate: `${from} ${meta.session ? "09:00" : "09:15"}:00`,
+      toDate: `${to} ${meta.session ? "23:59" : "15:30"}:00`,
     }),
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -145,6 +168,7 @@ async function update(rows: Record<string, string>[], symbol: string, interval: 
     const chunk = await fetchChunk(meta, start, end);
     const n = chunk?.timestamp?.length ?? 0;
     for (let i = 0; i < n; i++) {
+      if (meta.session && (chunk!.timestamp![i] + IST) % (interval * 60)) continue; // MCX sends the odd off-grid candle (e.g. 09:08)
       const round = (x: number) => Math.round(x * 100) / 100;
       bars.set(chunk!.timestamp![i], [round(chunk!.open[i]), round(chunk!.high[i]), round(chunk!.low[i]), round(chunk!.close[i]), chunk!.volume?.[i] ?? 0]);
     }
@@ -183,6 +207,7 @@ async function main() {
   if (!targets.length) throw new Error("Nothing to fetch: pass symbols, e.g. npm run fetch-data -- NIFTY");
 
   mkdirSync(DATA, { recursive: true });
+  process.env.DHAN_ACCESS_TOKEN = await dhanToken(process.env); // fresh one via TOTP if needed
   const rows = await scripMaster();
   let failed = 0;
   for (const { symbol, interval } of targets) {

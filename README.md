@@ -32,8 +32,8 @@ Settings and saved runs are kept in your browser's local storage.
 ## Market data
 
 Candles live in `public/data/` (one JSON file per symbol and interval, listed in `index.json`).
-To update or add symbols from Dhan, put `DHAN_CLIENT_ID` and `DHAN_ACCESS_TOKEN` in `.env`
-(see `.env.example`), then:
+To update or add symbols from Dhan, put `DHAN_CLIENT_ID`, `DHAN_PIN` and `DHAN_TOTP_SECRET` in `.env`
+(or a pasted `DHAN_ACCESS_TOKEN`; see `.env.example`), then:
 
 ```bash
 npm run fetch-data                 # update everything in index.json

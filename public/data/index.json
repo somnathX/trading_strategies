@@ -208,6 +208,44 @@
   "bars": 6154
  },
  {
+  "symbol": "CRUDEOIL",
+  "interval": 15,
+  "lotSize": 100,
+  "securityId": "573422",
+  "segment": "MCX_COMM",
+  "instrument": "FUTCOM",
+  "kind": "future",
+  "session": {
+   "open": 540,
+   "orbClose": 1380,
+   "close": 1435
+  },
+  "contract": "100 bbl lot",
+  "file": "CRUDEOIL_15m.json",
+  "from": "2026-07-20",
+  "to": "2026-11-10",
+  "bars": 4508
+ },
+ {
+  "symbol": "CRUDEOIL",
+  "interval": 5,
+  "lotSize": 100,
+  "securityId": "573422",
+  "segment": "MCX_COMM",
+  "instrument": "FUTCOM",
+  "kind": "future",
+  "session": {
+   "open": 540,
+   "orbClose": 1380,
+   "close": 1435
+  },
+  "contract": "100 bbl lot",
+  "file": "CRUDEOIL_5m.json",
+  "from": "2026-07-20",
+  "to": "2026-11-10",
+  "bars": 13555
+ },
+ {
   "symbol": "DIVISLAB",
   "interval": 5,
   "lotSize": 100,
