@@ -11,10 +11,11 @@
  *
  * Settings come from environment variables; see BOT.md.
  */
-import { buildMarket, dayOf, dayToISO, isoToDay, minuteOf } from "../engine/market";
+import { buildMarket, dayOf, dayToISO, minuteOf } from "../engine/market";
 import { entrySignal, exitSignal, trendSeries } from "../engine/trend";
 import { DEFAULT_CONFIG, type Candles, type Side, type StrategyConfig } from "../engine/types";
 import { PRESETS } from "../ui/presets";
+import { pickExpiry } from "../engine/options";
 import { canGenerate, dhanToken, generateToken, tokenSecondsLeft } from "../dhanAuth";
 
 type Env = Record<string, string | undefined>;
@@ -47,7 +48,7 @@ interface Quote { securityId: string; bid: number; ask: number; ltp: number; spo
 
 // ---------- settings ----------
 
-function settings(env: Env) {
+export function settings(env: Env) {
   const preset = PRESETS.find((p) => p.id === (env.BOT_PRESET ?? "top-10"));
   if (!preset || preset.cfg.strategy !== "ma_supertrend") throw new Error(`BOT_PRESET must be an MA + SuperTrend preset id, e.g. top-10`);
   const cfg: StrategyConfig = { ...DEFAULT_CONFIG, ...preset.cfg };
@@ -89,7 +90,7 @@ export const itmStrike = (type: "CE" | "PE", spot: number, step: number, n: numb
 
 // ---------- Dhan ----------
 
-function dhanClient(env: Env, token: string) {
+export function dhanClient(env: Env, token: string) {
   const id = env.DHAN_CLIENT_ID;
   if (!id) throw new Error("Set DHAN_CLIENT_ID");
   let lastChain = 0;
@@ -323,8 +324,8 @@ export async function tick(env: Env, now = Date.now() / 1000): Promise<string> {
   const open = async (dir: Side, bar: number, why: string) => {
     const type = dir === "long" ? "CE" : "PE";
     const list = monthlies(await dhan.expiries());
-    const expiry = list.find((x) => isoToDay(x) - day >= s.minDte);
-    if (!expiry) throw new Error("No monthly expiry far enough out");
+    const expiry = pickExpiry(list, day, s.minDte);
+    if (!expiry) throw new Error("No monthly expiry to buy");
     const guess = itmStrike(type, spotClose, NIFTY.step, s.itm);
     const probe = await dhan.quote(expiry, guess, type); // also gives the live index price
     const strike = itmStrike(type, probe.spot, NIFTY.step, s.itm);

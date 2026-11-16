@@ -30,7 +30,10 @@ export interface Settings {
   cfg: StrategyConfig;
   account: AccountConfig; // ₹ instruments
   usAccount: AccountConfig; // $ instruments
+  v2: V2Settings; // the V2 tab's fixes (applied only there unless "Use V2 in all tabs")
 }
+
+import { DEFAULT_V2, type V2Settings } from "./V2";
 
 const KEY = "orb:settings:v1";
 
@@ -65,23 +68,29 @@ export function defaultSettings(files: DataFile[]): Settings {
     cfg: DEFAULT_CONFIG,
     account: DEFAULT_ACCOUNT,
     usAccount: DEFAULT_US_ACCOUNT,
+    v2: DEFAULT_V2,
   };
 }
 
 /** Saved settings merged over defaults, so options added later get their defaults. */
 export function loadSettings(files: DataFile[]): Settings {
   const d = defaultSettings(files);
-  const s = load<Partial<Settings>>(KEY, {});
-  const merged: Settings = { ...d, ...s, cfg: { ...d.cfg, ...s.cfg }, account: { ...d.account, ...s.account }, usAccount: { ...d.usAccount, ...s.usAccount } };
+  const { dataTo, ...s } = load<Partial<Settings> & { dataTo?: string }>(KEY, {});
+  const merged: Settings = { ...d, ...s, cfg: { ...d.cfg, ...s.cfg }, account: { ...d.account, ...s.account }, usAccount: { ...d.usAccount, ...s.usAccount }, v2: { ...d.v2, ...s.v2 } };
   // NSE futures transaction charge moved from 0.00173% to 0.00183%: update the old default.
   if (merged.account.exchangePct === 0.00173) merged.account.exchangePct = d.account.exchangePct;
   // Returns are divided by capital: a saved 0 (possible before inputs enforced their minimum) would break every chart.
   if (!(merged.account.capital > 0)) merged.account.capital = d.account.capital;
   if (!(merged.usAccount.capital > 0)) merged.usAccount.capital = d.usAccount.capital;
-  return files.some((f) => f.file === merged.file) ? merged : d;
+  const f = files.find((x) => x.file === merged.file);
+  if (!f) return d;
+  // A test that ran to the end of the data follows it when newer candles are fetched.
+  if (dataTo && merged.to === dataTo && f.to > dataTo) merged.to = f.to;
+  return merged;
 }
 
-export const saveSettings = (s: Settings) => save(KEY, s);
+/** `dataTo`: where the chosen file ended when saved, so loadSettings can tell "up to the end" from a picked date. */
+export const saveSettings = (s: Settings, dataTo: string) => save(KEY, { ...s, dataTo });
 
 export function shiftYears(iso: string, years: number): string {
   const d = new Date(`${iso}T00:00:00Z`);

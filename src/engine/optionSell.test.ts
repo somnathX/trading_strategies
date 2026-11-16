@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { bs, expiryClose, YEAR, type OptionChain } from "./options";
-import { runOptionSell } from "./optionSell";
+import { realisedVol, runOptionSell } from "./optionSell";
 import { dayStart, isoToDay, MARKET_CLOSE } from "./market";
 import { DEFAULT_CONFIG, type StrategyConfig } from "./types";
 
@@ -62,3 +62,19 @@ describe("option selling", () => {
     expect(a.pnlPoints - b.pnlPoints).toBeCloseTo(8, 6); // 4 legs × in and out
   });
 });
+
+describe("option selling gates", () => {
+  it("realised vol is the annualised stdev of the last 20 daily log returns", () => {
+    let s = 25000;
+    const days = Array.from({ length: 30 }, (_, i) => ({ d: `2026-02-${String(i + 1).padStart(2, "0")}`, s: (s *= i % 2 ? 1.01 : 1 / 1.01), e: [] }));
+    const rv = realisedVol({ symbol: "NIFTY", step: 50, days });
+    expect(rv.has(days[19].d)).toBe(false); // needs 20 returns
+    expect(rv.get(days[29].d)!).toBeCloseTo(Math.log(1.01) * Math.sqrt(252) * Math.sqrt(20 / 19), 4);
+  });
+
+  it("with the IV-vs-realised gate on, skips entries until there's enough history to measure it", () => {
+    expect(runOptionSell(chain(() => 25000), cfg({ vrpMin: null })).length).toBe(1);
+    expect(runOptionSell(chain(() => 25000), cfg({ vrpMin: 0 })).length).toBe(0); // only 6 days of closes here
+  });
+});
+

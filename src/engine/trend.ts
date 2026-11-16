@@ -1,4 +1,4 @@
-import { ema, sma, supertrend, type SuperTrend } from "./indicators";
+import { adx, atr, ema, sma, supertrend, type SuperTrend } from "./indicators";
 import { dayToISO, hmToMinutes, type Market } from "./market";
 import type { Side, StrategyConfig, Trade } from "./types";
 
@@ -41,6 +41,17 @@ export function entrySignal(m: Market, s: TrendSeries, cfg: StrategyConfig, k: n
   return crossUp && st.up[k] ? "long" : crossDown && !st.up[k] ? "short" : null;
 }
 
+/** The V2 entry filters as one check (always true when they're all off). */
+function entryGate(m: Market, s: TrendSeries, cfg: StrategyConfig): (side: Side, k: number) => boolean {
+  const h = s.bars.map((i) => m.c.h[i]), l = s.bars.map((i) => m.c.l[i]), c = s.bars.map((i) => m.c.c[i]);
+  const strength = cfg.adxMin > 0 ? adx(h, l, c, 14) : null;
+  const slower = cfg.htfFilter ? supertrend(h, l, c, cfg.stPeriod * 4, cfg.stMultiplier) : null;
+  const range = cfg.maGapAtr > 0 ? atr(h, l, c, cfg.stPeriod) : null;
+  return (side, k) => (!strength || strength[k] >= cfg.adxMin)
+    && (!slower || slower.up[k] === (side === "long"))
+    && (!range || Math.abs(s.fast[k] - s.slow[k]) >= cfg.maGapAtr * range[k]);
+}
+
 /**
  * MA cross + SuperTrend.
  *  - Long when the fast MA crosses above the slow MA on a candle where SuperTrend is green.
@@ -57,6 +68,10 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
   let pos = null as { side: Side; k: number; price: number; stop: number; reentry?: Trade["reentry"] } | null; // `as`: set inside open()/close()
   let carry: Side | null = null; // closed at day end with SuperTrend still on its side: re-enter tomorrow if it still is
   let flipped = null as Side | null; // stopped by a SuperTrend flip: re-enter if it turns back before the MAs cross the other way
+  const gate = entryGate(m, series, cfg);
+  let waiting: Side | null = null; // a cross the V2 filters blocked: take it once they pass
+  let reentries = 0; // "ST turned back" re-entries since the last cross entry
+  const tooLate = (k: number) => !!cfg.trendLastEntry && m.minute[bars[k]] >= hmToMinutes(cfg.trendLastEntry);
   const aligned = (side: Side, k: number) => (side === "long" ? series.fast[k] > series.slow[k] : series.fast[k] < series.slow[k]);
 
   const close = (k: number, outcome: string) => {
@@ -115,12 +130,22 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
       if (!exitSignal(series, k, side) && m.day[i] >= fromDay && !lastOfDay) { open(side, k, "next_day"); continue; }
     }
     if (flipped && !aligned(flipped, k)) flipped = null; // the MAs crossed back: wait for a fresh cross
+    if (waiting && !aligned(waiting, k)) waiting = null;
 
     if (pos || m.day[i] < fromDay || (cfg.trendCloseEod && lastOfDay)) continue;
     const side = entrySignal(m, series, cfg, k);
-    if (side) open(side, k);
-    else if (flipped && !exitSignal(series, k, flipped) && !(cfg.trendLastEntry && m.minute[i] >= hmToMinutes(cfg.trendLastEntry))) {
+    if (side) {
+      waiting = null;
+      if (gate(side, k)) { open(side, k); reentries = 0; }
+      else waiting = side;
+    } else if (waiting && !exitSignal(series, k, waiting) && !tooLate(k) && gate(waiting, k)) {
+      open(waiting, k, "late");
+      waiting = null;
+      reentries = 0;
+    } else if (flipped && !exitSignal(series, k, flipped) && !tooLate(k)
+      && (cfg.maxReentries === null || reentries < cfg.maxReentries) && gate(flipped, k)) {
       open(flipped, k, "st_back"); // SuperTrend is back on the trade's side and the MAs never crossed against it
+      reentries++;
     }
   }
   if (pos) close(bars.length - 1, "open_end"); // still open when the test window ends: marked at the last close

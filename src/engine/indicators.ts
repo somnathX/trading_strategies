@@ -69,3 +69,24 @@ export function supertrend(h: number[], l: number[], c: number[], period: number
   }
   return { line, up };
 }
+
+/** Wilder's ADX: how strongly price is trending (0–100), whichever the direction. NaN until 2n − 1 bars. */
+export function adx(h: number[], l: number[], c: number[], n: number): number[] {
+  const out = new Array<number>(h.length).fill(NaN);
+  let tr = 0, plus = 0, minus = 0, dxSum = 0, dxCount = 0, prev = NaN;
+  for (let i = 1; i < h.length; i++) {
+    const up = h[i] - h[i - 1], down = l[i - 1] - l[i];
+    const t = Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1]));
+    const p = up > down && up > 0 ? up : 0, m = down > up && down > 0 ? down : 0;
+    if (i <= n) { tr += t; plus += p; minus += m; }
+    else { tr += t - tr / n; plus += p - plus / n; minus += m - minus / n; }
+    if (i < n) continue;
+    const sum = plus + minus;
+    const dx = sum > 0 ? (100 * Math.abs(plus - minus)) / sum : 0; // the DIs share the TR denominator, so it cancels
+    if (Number.isNaN(prev)) {
+      dxSum += dx;
+      if (++dxCount === n) out[i] = prev = dxSum / n;
+    } else out[i] = prev = (prev * (n - 1) + dx) / n;
+  }
+  return out;
+}

@@ -1,4 +1,4 @@
-import { dayOf, dayStart, isoToDay, MARKET_CLOSE, type Market } from "./market";
+import { dayOf, dayStart, isoToDay, MARKET_CLOSE, minuteOf, SESSION_OPEN, type Market } from "./market";
 import type { Trade } from "./types";
 
 /** Daily NSE option closes (public/data/options/{SYMBOL}.json, from scripts/fetch-options.ts). */
@@ -11,7 +11,17 @@ export interface OptionChain {
 export interface OptionSettings {
   itmStrikes: number; // how many strikes in the money to buy (6 × 50 = 300 pts on Nifty); when selling, strikes out of the money
   sell?: boolean; // sell a put for longs / a call for shorts instead of buying
-  minDte: number; // skip to the next monthly expiry when fewer calendar days remain
+  minDte: number; // skip to the next monthly expiry when fewer calendar days remain; NEXT_MONTH = always the next one
+}
+
+/** minDte value meaning "always next month's expiry", whatever the date. */
+export const NEXT_MONTH = 99;
+
+/** The monthly expiry to buy on `day`: the nearest with at least minDte calendar days left (else the furthest listed). */
+export function pickExpiry(expiries: string[], day: number, minDte: number): string | null {
+  const live = expiries.filter((x) => isoToDay(x) >= day).sort();
+  if (minDte >= NEXT_MONTH) return live[1] ?? null;
+  return live.find((x) => isoToDay(x) - day >= minDte) ?? live.at(-1) ?? null;
 }
 
 export interface OptionLeg {
@@ -100,40 +110,52 @@ export class OptionPricer {
     return -1;
   }
 
-  /** Nearest monthly expiry with at least minDte calendar days left, as listed the previous day. */
-  private expiryFor(day: number): string | null {
+  /** The expiry to buy (see pickExpiry), from the expiries listed the previous day. */
+  private expiryFor(day: number, minDte = this.s.minDte): string | null {
     const i = this.prevIndex(day);
-    if (i < 0) return null;
-    const ok = this.chain.days[i].e.map((e) => e.x).filter((x) => isoToDay(x) - day >= this.s.minDte);
-    return ok[0] ?? this.chain.days[i].e.map((e) => e.x).filter((x) => isoToDay(x) >= day).pop() ?? null;
+    return i < 0 ? null : pickExpiry(this.chain.days[i].e.map((e) => e.x), day, minDte);
   }
 
-  private iv(day: number, expiry: string, strike: number, type: "CE" | "PE"): number | null {
-    const key = `${day}|${expiry}|${strike}|${type}`;
+  /** IV of this strike implied by the close of chain day `i` (nearest strikes, then at-the-money, when its own close is unusable). */
+  private ivOn(i: number, expiry: string, strike: number, type: "CE" | "PE"): number | null {
+    const key = `${i}|${expiry}|${strike}|${type}`;
     const hit = this.ivCache.get(key);
     if (hit !== undefined) return hit;
-    const i = this.prevIndex(day);
-    if (i < 0) return null;
-    const prev = this.chain.days[i];
-    const series = prev.e.find((e) => e.x === expiry);
+    const day = this.chain.days[i];
+    const series = day.e.find((e) => e.x === expiry);
     if (!series) return null;
-    const years = (expiryClose(expiry) - (dayStart(isoToDay(prev.d)) + MARKET_CLOSE * 60)) / YEAR;
+    const years = (expiryClose(expiry) - (dayStart(isoToDay(day.d)) + MARKET_CLOSE * 60)) / YEAR;
     const at = (k: number) => {
       const j = (k - series.k0) / this.chain.step;
       const p = (type === "CE" ? series.ce : series.pe)[j];
-      return p ? impliedVol(type, p, prev.s, k, years) : null;
+      return p ? impliedVol(type, p, day.s, k, years) : null;
     };
     // This strike, else the nearest strikes either side, else at-the-money (deep ITM closes can be stale).
     let v: number | null = null;
     for (let off = 0; off <= 4 && v === null; off++) v = at(strike + off * this.chain.step) ?? at(strike - off * this.chain.step);
-    if (v === null) v = at(Math.round(prev.s / this.chain.step) * this.chain.step);
+    if (v === null) v = at(Math.round(day.s / this.chain.step) * this.chain.step);
     if (v !== null) this.ivCache.set(key, v);
     return v;
   }
 
+  /**
+   * IV at candle time t: yesterday's close IV at the open, sliding to today's close IV by 15:30.
+   * Using only yesterday's IV mispriced every day IV moved (a put bought the day after a sell-off cost the panic IV).
+   * Option prices never feed the signals, so today's close isn't look-ahead for decisions; it's only used for pricing.
+   */
+  private iv(t: number, expiry: string, strike: number, type: "CE" | "PE"): number | null {
+    const day = dayOf(t);
+    const prevI = this.prevIndex(day), todayI = this.byDay.get(day);
+    const prev = prevI < 0 ? null : this.ivOn(prevI, expiry, strike, type);
+    const today = todayI === undefined ? null : this.ivOn(todayI, expiry, strike, type);
+    if (prev === null || today === null) return prev ?? today;
+    const f = Math.min(1, Math.max(0, (minuteOf(t) - SESSION_OPEN) / (MARKET_CLOSE - SESSION_OPEN)));
+    return prev + (today - prev) * f;
+  }
+
   /** Premium of an option at candle time t with the index at `spot`. */
   private price(type: "CE" | "PE", strike: number, expiry: string, t: number, spot: number) {
-    const iv = this.iv(dayOf(t), expiry, strike, type);
+    const iv = this.iv(t, expiry, strike, type);
     return iv === null ? null : { ...bs(type, spot, strike, (expiryClose(expiry) - t) / YEAR, iv), iv };
   }
 
@@ -174,7 +196,7 @@ export class OptionPricer {
       const settle = bs(type, s, strike, 0, 0).price; // expires at intrinsic
       pnl += sign * (settle - open);
       at = this.m.c.t[bar];
-      const next = this.expiryFor(dayOf(at) + 1);
+      const next = this.expiryFor(dayOf(at) + 1, 0); // roll into the nearest one left
       if (!next || next === expiry) return null;
       expiry = next;
       strike = this.strikeFor(type, s);

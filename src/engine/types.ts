@@ -26,6 +26,12 @@ export interface StrategyConfig {
   trendReenter: boolean; // with trendCloseEod: re-enter at the next day's first candle if SuperTrend still agrees
   trendReenterOnFlip: boolean; // after a SuperTrend-flip exit, re-enter when it flips back while the MAs are still crossed that way
   trendLastEntry: string | null; // "HH:MM": no new MA-cross entries on candles starting at/after this time
+  // V2 entry filters (MA + SuperTrend, set from the V2 tab; all off by default). A cross they block is taken
+  // later, once they pass, while the MAs are still crossed that way and SuperTrend agrees.
+  adxMin: number; // ADX(14) at least this (trend strength); 0 = off
+  htfFilter: boolean; // a slower SuperTrend (4× the ATR period, ≈ 1 h on 15 m candles) must point the same way
+  maGapAtr: number; // fast and slow MA at least this many ATRs apart; 0 = off
+  maxReentries: number | null; // "ST turned back" re-entries allowed per MA cross; null = no limit
   // --- Option selling (weekly, from daily option closes) ---
   sellStructure: SellStructure;
   sellWidth: number; // call and put strikes this many expected weekly moves from the index (0 = at the money)
@@ -35,6 +41,9 @@ export interface StrategyConfig {
   exitDaysBefore: number; // trading days before the weekly expiry to close (0 = at the expiry close)
   targetPct: number; // close when the profit reaches this % of the premium paid / received (0 = off)
   stopPct: number; // close when the loss reaches this % of the premium (0 = off)
+  sellExpiry: "weekly" | "monthly"; // which expiry to sell: each week's, or each month's (from the monthly chain)
+  vrpMin: number | null; // enter only when ATM IV − 20-day realised vol ≥ this many vol points; null = off
+  adxMax: number; // enter only when daily ADX(14) ≤ this (a range, not a trend); 0 = off
   // --- Opening range breakout ---
   orbMinutes: number; // 15 | 30 | 45 | 60
   entryMode: "breakout" | "fib_pullback";
@@ -73,6 +82,10 @@ export const DEFAULT_CONFIG: StrategyConfig = {
   trendReenter: false,
   trendReenterOnFlip: false,
   trendLastEntry: null,
+  adxMin: 0,
+  htfFilter: false,
+  maGapAtr: 0,
+  maxReentries: null,
   sellStructure: "strangle", // with sellWidth 0: a short straddle (the "short-straddle" preset)
   sellWidth: 0,
   sellWing: 0.5,
@@ -81,6 +94,9 @@ export const DEFAULT_CONFIG: StrategyConfig = {
   exitDaysBefore: 0,
   targetPct: 0,
   stopPct: 50,
+  sellExpiry: "weekly",
+  vrpMin: null,
+  adxMax: 0,
   orbMinutes: 15,
   entryMode: "breakout",
   fibEntryLevel: 0.5,
@@ -139,7 +155,7 @@ export interface Trade {
   maxHoldSessions: number;
   impulseLow: number | null;
   impulseHigh: number | null;
-  reentry?: "next_day" | "st_back"; // MA + SuperTrend, not on a cross: re-opened at the next day's first candle after a
+  reentry?: "next_day" | "st_back" | "late"; // late: a V2 filter blocked the cross, entered once it passed. // MA + SuperTrend, not on a cross: re-opened at the next day's first candle after a
   // day-end close, or when SuperTrend turned back after a flip exit with the MAs still crossed the trade's way
   option?: import("./options").OptionLeg; // set when the trade is taken with options instead of futures
 }

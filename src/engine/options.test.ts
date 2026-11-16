@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildMarket, dayStart, isoToDay } from "./market";
-import { bs, impliedVol, OptionPricer, type OptionChain } from "./options";
+import { bs, impliedVol, NEXT_MONTH, OptionPricer, pickExpiry, type OptionChain } from "./options";
 import type { Candles, Trade } from "./types";
 
 describe("Black–Scholes", () => {
@@ -49,6 +49,16 @@ describe("OptionPricer", () => {
     expect(leg.stop).toBeCloseTo(leg.entry - leg.delta * 100, 6);
   });
 
+  it("slides from yesterday's IV to today's through the session, so an IV drop isn't booked as a loss", () => {
+    // Day 1 closed at 30% IV (a sell-off), day 2 at 15%. Using only yesterday's IV priced a 15:15 entry at 30%.
+    const panic = (type: "CE" | "PE") => Array.from({ length: 41 }, (_, j) => +bs(type, 25000, k0 + j * 50, years1, 0.3).price.toFixed(2));
+    const c2: OptionChain = { ...chain, days: [{ ...chain.days[0], e: [{ x: expiry, k0, ce: panic("CE"), pe: panic("PE") }] }, chain.days[1]] };
+    const at1515 = dayStart(isoToDay(d2)) + (15 * 60 + 15) * 60;
+    const leg = new OptionPricer(c2, m, { itmStrikes: 6, minDte: 7 }).leg(trade({ entryTime: at1515, exitTime: at1515 }))!;
+    expect(leg.iv).toBeLessThan(0.17); // 15:15 is nearly at today's close IV, not yesterday's 30%
+    expect(leg.iv).toBeGreaterThan(0.15);
+  });
+
   it("buys the put in the money for a short", () => {
     const leg = new OptionPricer(chain, m, { itmStrikes: 6, minDte: 7 }).leg(trade({ side: "short", exitPrice: 24800, pnlPoints: 200, stopPrice: 25100 }))!;
     expect([leg.type, leg.strike]).toEqual(["PE", 25300]);
@@ -72,5 +82,20 @@ describe("OptionPricer", () => {
   it("returns null when there's no previous day's option data", () => {
     const first = trade({ entryTime: dayStart(isoToDay(d1)) + 10 * 3600 });
     expect(new OptionPricer(chain, m, { itmStrikes: 6, minDte: 7 }).leg(first)).toBeNull();
+  });
+});
+
+describe("pickExpiry", () => {
+  const xs = ["2026-10-27", "2026-11-23", "2026-12-29"];
+  const on = (iso: string, minDte: number) => pickExpiry(xs, isoToDay(iso), minDte);
+  it("takes the nearest expiry with enough days left, or always next month", () => {
+    expect(on("2026-11-05", 7)).toBe("2026-11-23"); // 18 days left
+    expect(on("2026-11-05", 14)).toBe("2026-11-23");
+    expect(on("2026-11-18", 7)).toBe("2026-12-29"); // 5 days left: skip to December
+    expect(on("2026-11-18", 0)).toBe("2026-11-23");
+    expect(on("2026-11-23", 0)).toBe("2026-11-23"); // expiry day itself
+    expect(on("2026-11-05", NEXT_MONTH)).toBe("2026-12-29");
+    expect(on("2026-10-29", NEXT_MONTH)).toBe("2026-12-29"); // October's is gone: next month after November's
+    expect(on("2026-12-20", 30)).toBe("2026-12-29"); // nothing far enough out: the furthest listed
   });
 });

@@ -1,4 +1,5 @@
-import { dayStart, isoToDay, MARKET_CLOSE } from "./market";
+import { adx } from "./indicators";
+import { dayStart, isoToDay, MARKET_CLOSE, type Market } from "./market";
 import { expiryClose, impliedVol, YEAR, type OptionChain, type SpreadLeg } from "./options";
 import type { StrategyConfig, Trade } from "./types";
 
@@ -26,6 +27,27 @@ export function atmIv(chain: OptionChain, day: Day, expiry: string): number | nu
   return ivs.length ? ivs.reduce((a, b) => a + b) / ivs.length : null;
 }
 
+/** Annualised realised volatility of the index over the 20 closes up to each day (fraction), by date. */
+export function realisedVol(chain: OptionChain, n = 20): Map<string, number> {
+  const out = new Map<string, number>();
+  const r = chain.days.map((d, i) => (i ? Math.log(d.s / chain.days[i - 1].s) : 0));
+  for (let i = n; i < chain.days.length; i++) {
+    const w = r.slice(i - n + 1, i + 1);
+    const mean = w.reduce((a, b) => a + b, 0) / n;
+    out.set(chain.days[i].d, Math.sqrt((w.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1)) * 252));
+  }
+  return out;
+}
+
+/** Daily ADX(14) from the intraday candles, by IST day number. */
+export function dailyAdx(m: Market): Map<number, number> {
+  const days = m.dates.filter((d) => m.fullSessions.get(d)?.length);
+  const bars = days.map((d) => m.fullSessions.get(d)!);
+  const a = adx(bars.map((b) => Math.max(...b.map((i) => m.c.h[i]))), bars.map((b) => Math.min(...b.map((i) => m.c.l[i]))),
+    bars.map((b) => m.c.c[b[b.length - 1]]), 14);
+  return new Map(days.map((d, k) => [d, a[k]]));
+}
+
 /** The legs for one week: sold call above and put below the index, hedged per the structure. */
 function legsFor(cfg: StrategyConfig, s: number, move: number, step: number, near: string, far: string | undefined): LegSpec[] | null {
   const call = Math.ceil((s + cfg.sellWidth * move) / step) * step;
@@ -46,8 +68,10 @@ function legsFor(cfg: StrategyConfig, s: number, move: number, step: number, nea
  * and close `exitDaysBefore` trading days before the expiry, or earlier at the target / stop.
  * P&L is in premium points per unit, net of `slippagePoints` per leg per side.
  */
-export function runOptionSell(chain: OptionChain, cfg: StrategyConfig, fromDay = -Infinity, toDay = Infinity): Trade[] {
+export function runOptionSell(chain: OptionChain, cfg: StrategyConfig, fromDay = -Infinity, toDay = Infinity, m?: Market): Trade[] {
   const days = chain.days.filter((d) => isoToDay(d.d) >= fromDay && isoToDay(d.d) <= toDay);
+  const rv = cfg.vrpMin !== null ? realisedVol(chain) : null;
+  const trend = cfg.adxMax > 0 && m ? dailyAdx(m) : null;
   const nearOf = (d: Day) => d.e.find((e) => e.x >= d.d)?.x;
   const trades: Trade[] = [];
   for (let i = 1; i < days.length; i++) {
@@ -63,6 +87,8 @@ export function runOptionSell(chain: OptionChain, cfg: StrategyConfig, fromDay =
 
     const iv = atmIv(chain, day, near);
     if (iv === null || (cfg.ivMin > 0 && iv * 100 < cfg.ivMin) || (cfg.ivMax > 0 && iv * 100 > cfg.ivMax)) continue;
+    if (rv && !((iv - (rv.get(day.d) ?? Infinity)) * 100 >= cfg.vrpMin!)) continue; // options not rich enough vs realised moves
+    if (trend && !((trend.get(isoToDay(day.d)) ?? Infinity) <= cfg.adxMax)) continue; // trending: leave it to the trend strategy
     const move = day.s * iv * Math.sqrt((expiryClose(near) - (closeTime(day.d) + 60)) / YEAR);
     const far = day.e.map((e) => e.x).find((x) => x > near);
     const specs = legsFor(cfg, day.s, move, chain.step, near, far);

@@ -88,9 +88,9 @@ export function DataBar({ settings, files, onChange }: { settings: Settings; fil
             <button type="button" className="chip" aria-pressed={!settings.oosEnabled} onClick={() => set({ oosEnabled: false })}>Off</button>
             {HOLDOUTS.map((h) => (
               <button key={h.label} type="button" className="chip"
-                aria-pressed={settings.oosEnabled && settings.oosFrom === holdFrom(h.years)}
+                aria-pressed={settings.oosEnabled && settings.oosFrom === holdFrom(h.years)} title={`Hold back the last ${h.label}`}
                 onClick={() => set({ oosEnabled: true, oosFrom: holdFrom(h.years) })}>
-                Last {h.label}
+                {h.label}
               </button>
             ))}
           </div>

@@ -7,7 +7,7 @@ const SHORTCUTS: [string, string][] = [
   ["⇧⌘Z / Ctrl+Y", "Redo"],
   ["⌘S / Ctrl+S", "Save the current run for comparison"],
   ["1 – 5", "Switch view: Overview, Trades, Insights, Optimize, Saved"],
-  ["↑ / ↓", "Step through trades (with the trade list focused)"],
+  ["← / →", "Previous / next trade in the trade chart (Esc closes it)"],
   ["?", "Open this help"],
 ];
 
@@ -42,7 +42,7 @@ export function Help({ open, onClose }: { open: boolean; onClose: () => void }) 
           <li>If a candle touches both the stop and a target, the stop is assumed to come first. Gaps through the stop fill at the open.</li>
           <li>Opening-range trades are closed by 15:00. MA cross + SuperTrend uses every candle of the session (09:15–15:30 on NSE, 09:30–16:00 New York time for SPX), as a chart does, holds overnight until SuperTrend flips unless set to close at day end, and warms its indicators up on history before the test period. It doesn't model rolling futures at expiry.</li>
           <li>Sizing is on starting capital (no compounding), unless "Grow capital with profits" is on under Position size; then each trade is sized on the account value when it opens.</li>
-          <li>Costs: slippage both ways, brokerage per order, STT on the sell side, exchange and SEBI fees, stamp duty on the buy side, GST.</li>
+          <li>Slippage: entry slippage is built into the entry price (it lowers the points); exit slippage is shown with the charges. Charges: brokerage per order, STT on the sell side, exchange and SEBI fees, stamp duty on the buy side, GST, at today’s rates for every year tested.</li>
         </ul>
 
         <h3>Glossary</h3>

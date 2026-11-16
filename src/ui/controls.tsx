@@ -19,7 +19,7 @@ export function Segmented<T extends string | number | boolean | null>({ label, v
   return (
     <fieldset className="segmented-field">
       <legend className={hideLabel ? "sr-only" : "label"}>{label}</legend>
-      <div className="segmented" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+      <div className="segmented" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, auto))` }}>
         {options.map((o) => (
           <label key={String(o.value)} className="seg" title={o.hint}>
             <input type="radio" name={name} checked={o.value === value} onChange={() => onChange(o.value)} />

@@ -17,15 +17,18 @@ import { StrategyPanel } from "./ui/StrategyPanel";
 import { Sweep, type SweepState } from "./ui/Sweep";
 import { Trades } from "./ui/Trades";
 import { useThemeName } from "./ui/useTheme";
+import { V2, withV2 } from "./ui/V2";
+import { Bookmark, ChartColumnBig, FlaskConical, Grid3x3, LayoutDashboard, ListOrdered, Radio, type LucideIcon } from "lucide-react";
 import type { Request, Response, RunResult, RunSpec, SweepAxis } from "./worker";
 
-type Tab = "overview" | "trades" | "insights" | "optimize" | "compare";
-const TABS: { id: Tab; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "trades", label: "Trades" },
-  { id: "insights", label: "Insights" },
-  { id: "optimize", label: "Optimize" },
-  { id: "compare", label: "Saved" }, // id kept so old #compare links still work
+type Tab = "overview" | "trades" | "insights" | "optimize" | "compare" | "v2";
+const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
+  { id: "overview", label: "Overview", icon: LayoutDashboard },
+  { id: "trades", label: "Trades", icon: ListOrdered },
+  { id: "insights", label: "Insights", icon: ChartColumnBig },
+  { id: "optimize", label: "Optimize", icon: Grid3x3 },
+  { id: "compare", label: "Saved", icon: Bookmark }, // id kept so old #compare links still work
+  { id: "v2", label: "V2", icon: FlaskConical },
 ];
 const isTab = (x: string): x is Tab => TABS.some((t) => t.id === x);
 const tabFromHash = (): Tab => {
@@ -133,7 +136,7 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
   }, []);
 
   useEffect(() => {
-    saveSettings(settings);
+    saveSettings(settings, file.to);
     setRunning(true);
     const id = ++runId.current;
     const key = JSON.stringify(spec);
@@ -239,6 +242,7 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
         </div>
 
         <div className="actions">
+          <a className="btn ghost small" href="/live" title="Live positions and orders (Dhan)"><Radio size={15} aria-hidden="true" /> <span className="btn-text">Live</span></a>
           <button type="button" className="icon-btn" onClick={history.undo} disabled={!history.canUndo} aria-label="Undo" title="Undo (⌘Z)"><UndoIcon /></button>
           <button type="button" className="icon-btn" onClick={history.redo} disabled={!history.canRedo} aria-label="Redo" title="Redo (⇧⌘Z)"><RedoIcon /></button>
           <button type="button" className="btn" onClick={saveRun} disabled={!result} title="Save run (⌘S)"><BookmarkIcon /> <span className="btn-text">Save run</span></button>
@@ -295,7 +299,7 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
           {TABS.map((t, n) => (
             <button key={t.id} id={`tab-${t.id}`} role="tab" aria-selected={tab === t.id} aria-controls="panel"
               tabIndex={tab === t.id ? 0 : -1} className="tab" onClick={() => setTab(t.id)} title={`${t.label} (${n + 1})`}>
-              {t.label}
+              <t.icon size={15} strokeWidth={1.85} aria-hidden="true" />{t.label}
               {t.id === "compare" && runs.length > 0 && <span className="badge">{runs.length}</span>}
             </button>
           ))}
@@ -317,6 +321,15 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
                 setSettings({ ...settings, cfg: { ...settings.cfg, ...patch } }, false);
                 setTab("overview");
                 notify("Applied those settings", { label: "Undo", run: history.undo });
+              }} />
+          )}
+          {tab === "v2" && (
+            <V2 spec={spec} v1={result} v2={settings.v2} onChange={(v2) => setSettings({ ...settings, v2 })}
+              onUseEverywhere={() => {
+                const s2 = withV2(spec, settings.v2);
+                setSettings({ ...settings, cfg: s2.cfg, [acctKey]: s2.account }, false);
+                setTab("overview");
+                notify("V2 settings now apply in every tab", { label: "Undo", run: history.undo });
               }} />
           )}
           {tab === "compare" && (

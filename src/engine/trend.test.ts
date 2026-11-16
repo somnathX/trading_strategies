@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atr, ema, sma, supertrend } from "./indicators";
+import { adx, atr, ema, sma, supertrend } from "./indicators";
 import { buildMarket, dayStart, isoToDay, lowerBound } from "./market";
 import { runBacktest } from "./backtest";
 import { trendSeries } from "./trend";
@@ -15,6 +15,16 @@ describe("indicators", () => {
     const a = atr([11, 12, 13, 14], [9, 10, 11, 12], [10, 11, 12, 13], 2);
     expect(a.slice(1)).toEqual([2, 2, 2]); // every true range is 2 (high-low; gaps to the prior close are ≤ 2)
     expect(Number.isNaN(a[0])).toBe(true);
+  });
+
+  it("adx is high in a steady trend and low when price just chops", () => {
+    const up = Array.from({ length: 60 }, (_, i) => 100 + i);
+    const chop = Array.from({ length: 60 }, (_, i) => 100 + (i % 2));
+    const a = adx(up.map((x) => x + 1), up.map((x) => x - 1), up, 14);
+    const b = adx(chop.map((x) => x + 1), chop.map((x) => x - 1), chop, 14);
+    expect(Number.isNaN(a[25])).toBe(true); // needs 2n − 1 bars
+    expect(a[59]).toBeGreaterThan(90);
+    expect(b[59]).toBeLessThan(20);
   });
 
   it("supertrend is green on a rally, flips red on a crash, and sits on the right side of price", () => {
@@ -161,5 +171,37 @@ describe("MA cross + SuperTrend", () => {
   it("does not enter before the start day", () => {
     const from = m.dates[20];
     expect(runBacktest(m, cfg, from).every((t) => m.day[lowerBound(m.c.t, t.entryTime)] >= from)).toBe(true);
+  });
+
+  it("V2: filters only block crosses; a blocked cross is taken later once they pass", () => {
+    const strong = runBacktest(m, trendCfg({ adxMin: 25 }));
+    const { bars: b } = trendSeries(m, cfg);
+    const a = adx(b.map((i) => m.c.h[i]), b.map((i) => m.c.l[i]), b.map((i) => m.c.c[i]), 14);
+    expect(strong.length).toBeGreaterThan(0);
+    expect(strong.length).toBeLessThan(trades.length); // the filter matters on this data
+    for (const t of strong) expect(a[k(t.entryTime)]).toBeGreaterThanOrEqual(25);
+    expect(strong.some((t) => t.reentry === "late")).toBe(true);
+    for (const t of strong.filter((x) => x.reentry === "late")) {
+      const j = k(t.entryTime);
+      expect(t.side === "long" ? fast[j] > slow[j] : fast[j] < slow[j]).toBe(true);
+      expect(st.up[j]).toBe(t.side === "long");
+    }
+    // A slower SuperTrend has to agree with every entry.
+    const slow4 = supertrend(b.map((i) => m.c.h[i]), b.map((i) => m.c.l[i]), b.map((i) => m.c.c[i]), cfg.stPeriod * 4, cfg.stMultiplier);
+    const htf = runBacktest(m, trendCfg({ htfFilter: true }));
+    expect(htf.length).toBeGreaterThan(0);
+    for (const t of htf) expect(slow4.up[k(t.entryTime)]).toBe(t.side === "long");
+  });
+
+  it("V2: limits ST-turned-back re-entries per cross", () => {
+    const count = (o: Partial<StrategyConfig>) => runBacktest(m, trendCfg({ trendReenterOnFlip: true, ...o })).filter((t) => t.reentry === "st_back").length;
+    const all = count({});
+    expect(all).toBeGreaterThan(1); // the limit matters on this data
+    expect(count({ maxReentries: 0 })).toBe(0);
+    expect(count({ maxReentries: 1 })).toBeLessThan(all);
+  });
+
+  it("V2: with every filter off, trades are unchanged", () => {
+    expect(runBacktest(m, trendCfg({ adxMin: 0, htfFilter: false, maGapAtr: 0, maxReentries: null }))).toEqual(trades);
   });
 });

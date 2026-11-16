@@ -28,7 +28,7 @@ export function Overview({ result, prev, symbol, capital, oosFrom, splitDay, com
   const v = useMemo(() => verdict(result, symbol, capital, oosFrom), [result, symbol, capital, oosFrom]);
   const series = useMemo<ChartSeries[]>(() => [
     { name: "Net", kind: "area", color: 0, points: all.equity.map((p) => ({ day: p.day, value: p.equity })) },
-    { name: "Before costs", color: "muted", dash: 1, points: all.equity.map((p) => ({ day: p.day, value: p.grossEquity })) },
+    { name: "Before charges", color: "muted", dash: 1, points: all.equity.map((p) => ({ day: p.day, value: p.grossEquity })) },
     { name: `Buy & hold ${symbol}`, color: 1, dash: 2, points: benchmark.map((p) => ({ day: p.day, value: p.equity })) },
   ], [all.equity, benchmark, symbol]);
   const drawdown = useMemo(() => all.equity.map((p) => ({ day: p.day, value: p.drawdownPct })), [all.equity]);
@@ -60,10 +60,10 @@ export function Overview({ result, prev, symbol, capital, oosFrom, splitDay, com
       <section className="card" aria-labelledby="equity-h">
         <div className="card-head">
           <h2 id="equity-h">Account value</h2>
-          <span className="hint">From {inr(capital)}. The gap to the dashed line is what costs took.</span>
+          <span className="hint">From {inr(capital)}. The gap to the dashed line is what charges and exit slippage took.</span>
         </div>
         <EquityChart series={series} drawdown={drawdown} splitDay={inSample ? splitDay : null}
-          label={`Account value from ${inr(capital)} to ${inr(capital + s.netInr)}; before costs ${inr(capital + s.grossInr)}; buy and hold ${inr(benchmark[benchmark.length - 1]?.equity ?? capital)}.`} />
+          label={`Account value from ${inr(capital)} to ${inr(capital + s.netInr)}; before charges ${inr(capital + s.grossInr)}; buy and hold ${inr(benchmark[benchmark.length - 1]?.equity ?? capital)}.`} />
       </section>
 
       {inSample && outOfSample && <SplitTable inSample={inSample} outOfSample={outOfSample} oosFrom={oosFrom!} />}
@@ -82,7 +82,7 @@ function Kpi({ k, s, prev }: { k: MetricKey; s: Summary; prev: Summary | null })
   const improved = m.better === "high" ? delta > 0 : delta < 0;
   const showDelta = prev !== null && Math.abs(delta) > 1e-9 && Number.isFinite(delta);
   const sub: Partial<Record<MetricKey, string>> = {
-    netInr: `${inrShort(s.grossInr)} before costs`,
+    netInr: `${inrShort(s.grossInr)} before charges`,
     cagrPct: `${pct(s.returnPct)} total`,
     sharpe: s.sharpe >= 1 ? "good" : s.sharpe > 0 ? "weak" : "losing",
     maxDrawdownPct: `${inrShort(s.maxDrawdownInr)} from peak`,
@@ -163,9 +163,9 @@ function SplitTable({ inSample, outOfSample, oosFrom }: { inSample: Evaluation; 
 type MonthView = "pct" | "net" | "gross" | "costs" | "trades" | "win";
 const MONTH_VIEWS: { value: MonthView; label: string; hint: string }[] = [
   { value: "pct", label: "% return", hint: "Net P&L as % of starting capital" },
-  { value: "net", label: "₹ net", hint: "Net P&L after costs" },
-  { value: "gross", label: "₹ before costs", hint: "P&L before charges and slippage" },
-  { value: "costs", label: "₹ costs", hint: "Charges and slippage paid" },
+  { value: "net", label: "₹ net", hint: "Net P&L after charges and slippage" },
+  { value: "gross", label: "₹ before charges", hint: "P&L before charges and exit slippage" },
+  { value: "costs", label: "₹ charges", hint: "Charges and exit slippage paid" },
   { value: "trades", label: "Trades", hint: "Trades closed in the month" },
   { value: "win", label: "Win rate", hint: "Share of the month's trades that made money" },
 ];

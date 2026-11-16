@@ -125,9 +125,9 @@
   "instrument": "INDEX",
   "kind": "index",
   "file": "BANKNIFTY_15m.json",
-  "from": "2022-11-01",
-  "to": "2026-11-06",
-  "bars": 24892
+  "from": "2021-08-04",
+  "to": "2026-11-16",
+  "bars": 33329
  },
  {
   "symbol": "BANKNIFTY",
@@ -138,9 +138,9 @@
   "instrument": "INDEX",
   "kind": "index",
   "file": "BANKNIFTY_5m.json",
-  "from": "2022-11-01",
-  "to": "2026-11-06",
-  "bars": 74554
+  "from": "2021-08-04",
+  "to": "2026-11-16",
+  "bars": 99837
  },
  {
   "symbol": "BEL",
@@ -566,9 +566,9 @@
   "instrument": "INDEX",
   "kind": "index",
   "file": "NIFTY_15m.json",
-  "from": "2022-11-01",
-  "to": "2026-11-06",
-  "bars": 24905
+  "from": "2020-01-01",
+  "to": "2026-11-16",
+  "bars": 43334
  },
  {
   "symbol": "NIFTY",
@@ -579,9 +579,9 @@
   "instrument": "INDEX",
   "kind": "index",
   "file": "NIFTY_5m.json",
-  "from": "2022-05-02",
-  "to": "2026-11-06",
-  "bars": 83873
+  "from": "2020-01-01",
+  "to": "2026-11-16",
+  "bars": 129836
  },
  {
   "symbol": "NTPC",

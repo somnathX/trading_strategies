@@ -35,7 +35,7 @@ Every order carries a correlation id, so if the bot restarts mid-order it picks 
 | `LOTS` | `1` | Lots per trade |
 | `LOT_SIZE` | `65` | Nifty lot size. Update it if NSE changes it; a wrong size gets the order rejected |
 | `ITM_STRIKES` | `6` | Strikes in the money (6 × 50 = 300 points, 8 = 400 points) |
-| `MIN_DTE` | `7` | Skip to the next month when fewer days are left |
+| `MIN_DTE` | `7` | Skip to the next month when fewer days are left. `0` = always the nearest expiry, `99` = always next month's |
 | `BOT_PAUSED` | unset | Set to anything to stop trading (kill switch) |
 | `BOT_STATE_FILE` | `.bot-state.json` | Where the bot remembers its position on a VM |
 | `UPSTASH_REDIS_REST_URL`/`_TOKEN` (or `KV_REST_API_URL`/`_TOKEN`) | unset | State storage on Vercel |

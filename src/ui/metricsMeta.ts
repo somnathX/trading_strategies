@@ -30,7 +30,7 @@ export const METRICS: MetricMeta[] = [
   { key: "avgPoints", label: "Points per trade", fmt: (x) => num(x), better: "high", explain: "Average index points per trade after slippage, before charges." },
   { key: "avgWinInr", label: "Average win", fmt: (x) => inr(x), better: "high", explain: "Average net profit of winning trades." },
   { key: "avgLossInr", label: "Average loss", fmt: (x) => inr(x), better: "high", explain: "Average net loss of losing trades." },
-  { key: "costsInr", label: "Costs", fmt: (x) => inr(x), short: inrShort, better: "low", explain: "Slippage plus brokerage, STT, exchange, SEBI, stamp duty and GST." },
+  { key: "costsInr", label: "Charges & slippage", fmt: (x) => inr(x), short: inrShort, better: "low", explain: "Charges (brokerage, STT, exchange, SEBI, stamp duty, GST) plus exit slippage. Entry slippage is already in the entry price." },
   { key: "maxConsecLosses", label: "Longest losing streak", fmt: (x) => String(x), better: "low", explain: "Most losing trades in a row." },
 ];
 

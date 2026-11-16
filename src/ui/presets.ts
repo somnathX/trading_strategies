@@ -77,7 +77,7 @@ export const presetsFor = (kind: StrategyKind) => PRESETS.filter((p) => (p.cfg.s
 /** Settings only the MA cross + SuperTrend / option-selling strategies use; everything else is opening-range only. */
 const OWN_KEYS: Partial<Record<StrategyKind, (keyof StrategyConfig)[]>> = {
   ma_supertrend: ["maType", "maFast", "maSlow", "stPeriod", "stMultiplier", "trendCloseEod", "trendReenter", "trendReenterOnFlip", "trendLastEntry"],
-  option_sell: ["sellStructure", "sellWidth", "sellWing", "ivMin", "ivMax", "exitDaysBefore", "targetPct", "stopPct"],
+  option_sell: ["sellStructure", "sellWidth", "sellWing", "ivMin", "ivMax", "exitDaysBefore", "targetPct", "stopPct", "sellExpiry", "vrpMin", "adxMax"],
 };
 const SHARED_KEYS: (keyof StrategyConfig)[] = ["strategy", "slippagePoints"];
 const ownerOf = (k: keyof StrategyConfig): StrategyKind =>

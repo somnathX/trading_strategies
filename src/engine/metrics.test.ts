@@ -14,12 +14,13 @@ const trade = (o: Partial<Trade>): Trade => ({
 describe("costs and sizing", () => {
   it("sizes by risk and charges index-futures costs", () => {
     // ₹5,000 risk / (50 pts * 65) = 1.5 -> 1 lot. Exit slips to 25,099.
-    // Charges: brokerage 3 orders 60 (₹20 < 0.03% of each order), exchange 0.00183% 59.59,
-    // SEBI 3.26, STT 815.72, stamp 32.50, GST 22.12 = 993.18; plus 65 slippage. Gross 6,500 -> net 5,441.82.
+    // Charges: brokerage 3 orders 60 (₹20 < 0.03% of each order), exchange 0.00173% 56.34,
+    // SEBI 3.26, STT 815.72, stamp 32.50, GST 21.53 = 989.34; plus 65 slippage. Gross 6,500 -> net 5,445.66.
     const r = sizeAndCost(trade({}), 65, DEFAULT_ACCOUNT);
     expect([r.lots, r.qty, r.grossInr]).toEqual([1, 65, 6500]);
-    expect(r.costsInr).toBeCloseTo(1058.18, 1);
-    expect(r.netInr).toBeCloseTo(5441.82, 1);
+    expect(r.costsInr).toBeCloseTo(1054.34, 1);
+    expect([r.chargesInr, r.slippageInr]).toEqual([expect.closeTo(989.34, 1), 65]);
+    expect(r.netInr).toBeCloseTo(5445.66, 1);
   });
 
   it("caps size at what the capital can margin, however tight the stop", () => {
@@ -133,3 +134,29 @@ describe("evaluate", () => {
     expect(e.summary.ruinDay).toBe(days[0]);
   });
 });
+
+describe("V2 sizing", () => {
+  const day = (n: number) => at(`2026-01-${String(5 + n).padStart(2, "0")}`);
+  // Five ₹-losing trades in a row, then a win; 50-pt stop, ₹5 L at 2% = ₹10,000 risk → 3 lots of 65.
+  const seq = [...Array.from({ length: 5 }, (_, n) => trade({ entryTime: day(n), exitTime: day(n) + 60, exitPrice: 24950, pnlPoints: -50, outcome: "stop" })),
+    trade({ entryTime: day(5), exitTime: day(5) + 60 }), trade({ entryTime: day(6), exitTime: day(6) + 60 })];
+  const acct = { ...DEFAULT_ACCOUNT, riskPct: 2, marginPct: 5 }; // low margin so capital never caps the size here
+
+  it("caps lots at maxLots", () => {
+    expect(sizeAndCost(trade({}), 65, { ...acct, maxLots: 2 }).lots).toBe(2);
+    expect(sizeAndCost(trade({}), 65, acct).lots).toBe(3);
+  });
+
+  it("halves size after a losing streak until a win", () => {
+    const rows = evaluate(seq, [], 65, { ...acct, cutAfterLosses: 3 }).rows;
+    expect(rows.map((r) => r.lots)).toEqual([3, 3, 3, 1, 1, 1, 3]); // half of 2% → 1% → 1 lot
+    expect(rows.map((r) => !!r.halved)).toEqual([false, false, false, true, true, true, false]);
+  });
+
+  it("halves size while the account is far enough below its peak", () => {
+    const rows = evaluate(seq, [], 65, { ...acct, cutDrawdownPct: 1.5 }).rows;
+    // Each loss is about ₹10.7 k (≈2.1% of ₹5 L): from the second trade on the account is >1.5% below its peak.
+    expect(rows.slice(0, 3).map((r) => r.lots)).toEqual([3, 1, 1]);
+  });
+});
+

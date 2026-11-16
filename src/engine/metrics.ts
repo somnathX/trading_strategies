@@ -7,6 +7,10 @@ export interface AccountConfig {
   compound?: boolean; // with % risk sizing: size on the current account value (starting capital + closed P&L) instead
   profitRiskPct?: number; // with compound: keep sizing the starting capital at riskPct and size the profits so far
   // separately at this % (the two sizes are added). 0/unset = the whole account at riskPct.
+  // V2 (set from the V2 tab; off when unset):
+  maxLots?: number; // never more than this many lots in one trade (exchange order limits, liquidity)
+  cutAfterLosses?: number; // halve the size after this many losses in a row, until a win
+  cutDrawdownPct?: number; // halve the size while the account is this % or more below its peak
   sizing: "risk" | "fixed";
   riskPct: number; // % of capital risked per trade (entry to stop) when sizing = risk
   marginPct: number; // margin blocked per lot, % of contract value: caps how many lots capital can hold
@@ -49,7 +53,7 @@ export const DEFAULT_ACCOUNT: AccountConfig = {
   brokeragePerOrder: 20,
   brokeragePct: 0.03,
   sttSellPct: 0.05,
-  exchangePct: 0.00183,
+  exchangePct: 0.00173, // NSE futures, since 1 Oct 2024
   sebiPerCrore: 10,
   stampBuyPct: 0.002,
   gstPct: 18,
@@ -80,7 +84,13 @@ export interface TradeRow extends Trade {
   overRisk?: boolean; // skipped (0 lots): one lot would risk more than the risk % allows
   grossInr: number; // pnlPoints * qty
   costsInr: number; // exit slippage + charges
+  chargesInr: number; // brokerage, STT, exchange, SEBI, stamp duty, GST (what the contract note shows)
+  slippageInr: number; // exit slippage (entry slippage is already in the entry price)
+  chargeParts: { brokerage: number; stt: number; exchange: number; gst: number; stamp: number; sebi: number; other: number };
   netInr: number;
+  halved?: boolean; // V2: sized at half after a losing streak or in a drawdown
+  /** How % risk sizing got its lots: budget = capital × risk %, lots = budget ÷ (stop points × lot size), rounded down. */
+  sizeBasis?: { capital: number; riskPct: number; budget: number; perLot: number; stopPts: number; profit?: number; profitRiskPct?: number; extra?: number };
 }
 
 export interface Summary {
@@ -144,7 +154,7 @@ export function sizeAndCost(t: Trade, lotSize: number, a: AccountConfig): TradeR
   const overRisk = !!a.skipOverRisk && a.sizing === "risk" && stopPts * lotSize > (a.capital * a.riskPct) / 100;
   // A very tight stop would otherwise ask for more lots than the capital could ever margin.
   // A sold option blocks margin on the index like a future; a bought one costs its premium; spreads say what they block.
-  const lots = overRisk ? 0 : Math.min(wantedLots, o?.margin
+  const lots = overRisk ? 0 : Math.min(wantedLots, a.maxLots || Infinity, o?.margin
     ? maxLotsByMargin(o.margin, lotSize, { ...a, marginPct: 100 })
     : maxLotsByMargin(o?.sell ? t.entryPrice : entry, lotSize, a));
   const qty = lots * lotSize;
@@ -159,11 +169,17 @@ export function sizeAndCost(t: Trade, lotSize: number, a: AccountConfig): TradeR
   const brokerage = qty === 0 ? 0 : legs * (perOrder(entry * qty) + fills * perOrder((exitPrice * qty) / fills));
   const exchange = ((buy + sell) * a.exchangePct) / 100;
   const sebi = ((buy + sell) * a.sebiPerCrore) / 1e7;
-  const charges = brokerage + exchange + sebi + (sell * a.sttSellPct) / 100 + (buy * a.stampBuyPct) / 100
-    + ((brokerage + exchange + sebi) * a.gstPct) / 100 + (a.feePerLot ?? 0) * lots * (1 + fills);
+  const chargeParts = {
+    brokerage, exchange, sebi, stt: (sell * a.sttSellPct) / 100, stamp: (buy * a.stampBuyPct) / 100,
+    gst: ((brokerage + exchange + sebi) * a.gstPct) / 100, other: (a.feePerLot ?? 0) * lots * (1 + fills),
+  };
+  const chargesInr = Object.values(chargeParts).reduce((x, y) => x + y, 0);
   const grossInr = (o ? o.pnl : t.pnlPoints) * qty;
-  const costsInr = a.exitSlippagePoints * qty + charges;
-  return { ...t, lots, qty, riskInr: stopPts * qty, wantedLots, marginCapped: !overRisk && lots < wantedLots, grossInr, costsInr, netInr: grossInr - costsInr, ...(overRisk && { overRisk }) };
+  const slippageInr = a.exitSlippagePoints * qty;
+  const costsInr = slippageInr + chargesInr;
+  const sizeBasis = a.sizing === "risk" && stopPts > 0
+    ? { capital: a.capital, riskPct: a.riskPct, budget: (a.capital * a.riskPct) / 100, perLot: stopPts * lotSize, stopPts } : undefined;
+  return { ...t, lots, qty, riskInr: stopPts * qty, wantedLots, sizeBasis, marginCapped: !overRisk && lots < Math.min(wantedLots, a.maxLots || Infinity), grossInr, costsInr, chargesInr, slippageInr, chargeParts, netInr: grossInr - costsInr, ...(overRisk && { overRisk }) };
 }
 
 const sum = (xs: number[]) => xs.reduce((s, x) => s + x, 0);
@@ -174,24 +190,51 @@ const sum = (xs: number[]) => xs.reduce((s, x) => s + x, 0);
  * With profitRiskPct, two pots instead: the starting capital at riskPct (as with fixed sizing) plus the profit so far
  * at profitRiskPct, added together and capped by what the whole account can margin.
  */
+/** One trade sized on the account value `value` (compounding; see sizeCompounding). */
+function sizeOnValue(t: Trade, value: number, lotSize: number, a: AccountConfig): TradeRow {
+  if (value <= 0) return { ...sizeAndCost(t, lotSize, a), lots: 0, netInr: 0 };
+  if (!((a.profitRiskPct ?? 0) > 0)) return sizeAndCost(t, lotSize, { ...a, capital: value });
+  const base = sizeAndCost(t, lotSize, a); // the starting capital, as if nothing had been made or lost
+  const profit = value - a.capital;
+  const extra = profit > 0 && stopPoints(t) > 0 ? Math.floor((profit * a.profitRiskPct!) / 100 / (stopPoints(t) * lotSize)) : 0;
+  const lots = base.lots + extra;
+  if (lots === 0) return base;
+  const row = sizeAndCost(t, lotSize, { ...a, sizing: "fixed", fixedLots: lots, capital: value });
+  return { ...row, wantedLots: base.wantedLots + extra, marginCapped: row.lots < lots,
+    sizeBasis: base.sizeBasis && { ...base.sizeBasis, profit, profitRiskPct: a.profitRiskPct, extra } };
+}
+
 function sizeCompounding(trades: Trade[], lotSize: number, a: AccountConfig): TradeRow[] {
   const closed: { at: number; net: number }[] = [];
-  const twoPots = (a.profitRiskPct ?? 0) > 0;
-  const size = (t: Trade, value: number): TradeRow => {
-    if (!twoPots) return sizeAndCost(t, lotSize, { ...a, capital: value });
-    const base = sizeAndCost(t, lotSize, a); // the starting capital, as if nothing had been made or lost
-    const profit = value - a.capital;
-    const extra = profit > 0 && stopPoints(t) > 0 ? Math.floor((profit * a.profitRiskPct!) / 100 / (stopPoints(t) * lotSize)) : 0;
-    const lots = base.lots + extra;
-    if (lots === 0) return base;
-    const row = sizeAndCost(t, lotSize, { ...a, sizing: "fixed", fixedLots: lots, capital: value });
-    return { ...row, wantedLots: base.wantedLots + extra, marginCapped: row.lots < lots };
-  };
   return trades.map((t) => {
     const value = a.capital + sum(closed.filter((c) => c.at <= t.entryTime).map((c) => c.net));
-    const row = value > 0 ? size(t, value) : { ...sizeAndCost(t, lotSize, a), lots: 0, netInr: 0 };
+    const row = sizeOnValue(t, value, lotSize, a);
     if (row.lots > 0) closed.push({ at: t.exitTime, net: row.netInr });
     return row;
+  });
+}
+
+/**
+ * V2: half size after `cutAfterLosses` losses in a row, or while the account (capital + closed P&L) is
+ * `cutDrawdownPct` % or more below its peak; full size again after a win / once back near the peak.
+ * ponytail: rescans the closed trades for every new one (O(n²)); fine for the few hundred trades a test makes.
+ */
+function sizeWithCuts(trades: Trade[], lotSize: number, a: AccountConfig, grow: boolean): TradeRow[] {
+  const closed: { at: number; net: number }[] = [];
+  return trades.map((t) => {
+    const before = closed.filter((c) => c.at <= t.entryTime).sort((x, y) => x.at - y.at);
+    let value = a.capital, peak = a.capital, streak = 0;
+    for (const c of before) {
+      value += c.net;
+      peak = Math.max(peak, value);
+      streak = c.net <= 0 ? streak + 1 : 0;
+    }
+    const halved = (!!a.cutAfterLosses && streak >= a.cutAfterLosses)
+      || (!!a.cutDrawdownPct && peak > 0 && ((peak - value) / peak) * 100 >= a.cutDrawdownPct);
+    const acct = halved ? { ...a, riskPct: a.riskPct / 2, profitRiskPct: (a.profitRiskPct ?? 0) / 2, fixedLots: Math.max(1, Math.floor(a.fixedLots / 2)) } : a;
+    const row = grow ? sizeOnValue(t, value, lotSize, acct) : sizeAndCost(t, lotSize, acct);
+    if (row.lots > 0) closed.push({ at: t.exitTime, net: row.netInr });
+    return halved ? { ...row, halved } : row;
   });
 }
 
@@ -200,8 +243,9 @@ function sizeCompounding(trades: Trade[], lotSize: number, a: AccountConfig): Tr
  * days without trades count as flat days for Sharpe and drawdown).
  */
 export function evaluate(trades: Trade[], days: number[], lotSize: number, a: AccountConfig): Evaluation {
-  const grow = a.compound && a.sizing === "risk"; // fixed lots stay fixed
-  const sized = grow ? sizeCompounding(trades, lotSize, a) : trades.map((t) => sizeAndCost(t, lotSize, a));
+  const grow = !!a.compound && a.sizing === "risk"; // fixed lots stay fixed
+  const sized = a.cutAfterLosses || a.cutDrawdownPct ? sizeWithCuts(trades, lotSize, a, grow)
+    : grow ? sizeCompounding(trades, lotSize, a) : trades.map((t) => sizeAndCost(t, lotSize, a));
   const rows = sized.filter((r) => r.lots > 0);
   const skippedForRisk = sized.filter((r) => r.overRisk).length;
   const skippedForMargin = sized.length - rows.length - skippedForRisk;
