@@ -9,8 +9,8 @@ const make = (I: LucideIcon, base: LucideProps = {}) => (p: LucideProps) => <I s
 
 export const LogoIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" focusable="false" {...p}>
-    <rect width="28" height="28" rx="7" fill="var(--accent-soft)" />
-    <path d="M8 7v14M14 5v16M20 9v12" stroke="var(--text-3)" strokeWidth="1.5" strokeLinecap="round" />
+    <rect width="28" height="28" rx="7" fill="var(--muted)" />
+    <path d="M8 7v14M14 5v16M20 9v12" stroke="var(--muted-foreground)" strokeWidth="1.5" strokeLinecap="round" />
     <rect x="6" y="11" width="4" height="7" rx="1" fill="var(--pos)" />
     <rect x="12" y="8" width="4" height="8" rx="1" fill="var(--neg)" />
     <rect x="18" y="12" width="4" height="6" rx="1" fill="var(--pos)" />

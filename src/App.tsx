@@ -4,13 +4,16 @@ import type { MetricKey, Summary } from "./engine/metrics";
 import { DEFAULT_CONFIG, type Candles, type StrategyConfig } from "./engine/types";
 import { Compare, loadRuns, saveRuns, type SavedRun } from "./ui/Compare";
 import { lotEstimate } from "./ui/analysis";
-import { DataBar } from "./ui/DataBar";
-import { inr, pct, setCurrency, shortDateTime } from "./ui/format";
+import { DataSection } from "./ui/ContextBar";
+import { Hero } from "./ui/Hero";
+import { load, save } from "./ui/storage";
+import { verdict } from "./ui/analysis";
+import { inr, setCurrency, shortDateTime } from "./ui/format";
 import { Help, Toast, type ToastMsg } from "./ui/Help";
-import { BookmarkIcon, CloseIcon, HelpIcon, LogoIcon, MoonIcon, RedoIcon, SlidersIcon, SunIcon, UndoIcon } from "./ui/icons";
+import { LogoIcon } from "./ui/icons";
 import { Insights } from "./ui/Insights";
 import { Overview } from "./ui/Overview";
-import { describe, matchPreset, presetConfig } from "./ui/presets";
+import { describe, matchPreset, presetConfig, STRATEGIES } from "./ui/presets";
 import { intervalLabel, isUsd, loadSettings, saveSettings, sessionOf, withDerived, type DataFile, type Settings } from "./ui/settings";
 import { resample } from "./engine/market";
 import { StrategyPanel } from "./ui/StrategyPanel";
@@ -18,7 +21,13 @@ import { Sweep, type SweepState } from "./ui/Sweep";
 import { Trades } from "./ui/Trades";
 import { useThemeName } from "./ui/useTheme";
 import { V2, withV2 } from "./ui/V2";
-import { Bookmark, ChartColumnBig, FlaskConical, Grid3x3, LayoutDashboard, ListOrdered, Radio, type LucideIcon } from "lucide-react";
+import { Bookmark, BookmarkPlus, ChartColumnBig, CircleHelp, FlaskConical, Grid3x3, LayoutDashboard, ListOrdered, Moon, PanelLeftClose, PanelLeftOpen, Radio, Redo2, Sun, Undo2, type LucideIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import type { Request, Response, RunResult, RunSpec, SweepAxis } from "./worker";
 
 type Tab = "overview" | "trades" | "insights" | "optimize" | "compare" | "v2";
@@ -69,7 +78,14 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
   const [sweep, setSweep] = useState<SweepState | null>(null);
   const [focusDay, setFocusDay] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false); // phone layout only
+  // Data & strategy sidebar: docked on screens 1024px+ (open by default, remembered), a slide-out sheet below.
+  const wide = useMedia("(min-width: 1024px)");
+  const [docked, setDocked] = useState(() => load("orb:sidebar", true));
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const panelOpen = wide ? docked : sheetOpen;
+  const setPanelOpen = useCallback((open: boolean) => {
+    if (matchMedia("(min-width: 1024px)").matches) { setDocked(open); save("orb:sidebar", open); } else setSheetOpen(open);
+  }, []);
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const file = files.find((f) => f.file === settings.file)!;
   const acctKey = isUsd(file) ? "usAccount" : "account";
@@ -98,11 +114,8 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
   const setTab = useCallback((t: Tab) => {
     setTabState(t);
     window.history.replaceState(null, "", `#${t}`);
-    // Start the new view at its top, just under the sticky tab bar (only if we'd scrolled past it).
-    requestAnimationFrame(() => {
-      const panel = document.getElementById("panel");
-      if (panel && panel.getBoundingClientRect().top < 0) panel.scrollIntoView({ block: "start" });
-    });
+    // Each view starts at its top (the main column scrolls on desktop, the page on phones).
+    requestAnimationFrame(() => { document.querySelector("main")?.scrollTo({ top: 0 }); window.scrollTo({ top: 0 }); });
   }, []);
   useEffect(() => {
     const onHash = () => setTabState(tabFromHash());
@@ -212,140 +225,159 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
   const s = result?.all.summary;
   const splitDay = settings.oosEnabled ? isoToDay(settings.oosFrom) : null;
   const preset = matchPreset(settings.cfg);
+  const v = useMemo(() => (result ? verdict(result, file.symbol, account.capital, settings.oosEnabled ? settings.oosFrom : null) : null),
+    [result, file.symbol, account.capital, settings.oosEnabled, settings.oosFrom]);
+  const strategyKind = STRATEGIES.find((x) => x.value === settings.cfg.strategy)?.label ?? settings.cfg.strategy;
+  const counts: Partial<Record<Tab, number>> = { trades: result?.all.rows.length, compare: runs.length || undefined };
+
+  const sidebar = (
+    <>
+      <DataSection settings={settings} files={files} onChange={setSettings} />
+      <StrategyPanel cfg={settings.cfg} account={account} lotSize={file.lotSize} interval={file.interval} file={file}
+        onCfg={(cfg) => setSettings({ ...settings, cfg })}
+        onPreset={(p) => {
+          // Keep the instrument; only move to the preset's timeframe if this instrument has it.
+          const same = p.interval ? files.find((f) => f.symbol === file.symbol && f.interval === p.interval) : undefined;
+          setSettings({ ...settings, cfg: presetConfig(p), file: same?.file ?? settings.file });
+        }}
+        onAccount={(a) => setSettings({ ...settings, [acctKey]: a })}
+        saved={runs.map((r) => ({ id: r.id, name: r.name }))}
+        onLoadSaved={(id) => {
+          const r = runs.find((x) => x.id === id);
+          if (r) { loadSaved(r.settings); notify(`Loaded “${r.name}”`, { label: "Undo", run: history.undo }); }
+        }}
+        lots={result ? lotEstimate(result.all.rows, market ? market.c.c[market.c.c.length - 1] : null, file.lotSize, account) : null} />
+    </>
+  );
+  const brand = (
+    <div className="flex h-14 shrink-0 items-center gap-2.5 border-b px-4">
+      <LogoIcon />
+      <div className="flex min-w-0 flex-col leading-tight">
+        <span className="text-sm font-semibold tracking-tight">ORB Backtester</span>
+        <span className="text-xs text-muted-foreground">Data &amp; strategy</span>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="app">
-      <a className="skip" href="#panel">Skip to results</a>
-      <header className="topbar">
-        <div className="brand">
-          <LogoIcon />
-          <div className="brand-text">
-            <h1>ORB Backtester</h1>
-            <p>{preset ? preset.name : describe(settings.cfg)}</p>
-          </div>
-        </div>
+    <TooltipProvider>
+      <div className="relative flex h-dvh overflow-hidden bg-background text-foreground">
+        <a href="#panel" className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground">Skip to results</a>
 
-        <div className="status" aria-live="polite">
-          {runError ? <span className="neg">Couldn't run: {runError}</span>
-            : s ? (
-              <>
-                <span className={`big ${s.netInr >= 0 ? "pos" : "neg"}`}>{inr(s.netInr)}</span>
-                <span className="meta">
-                  {pct(s.returnPct)} · {s.trades} trades
+        {/* Inputs on the left: docked on wide screens, a slide-out panel on narrow ones. */}
+        {wide ? panelOpen && (
+          <aside id="strategy" aria-label="Data and strategy" className="flex w-[340px] shrink-0 flex-col border-r bg-sidebar xl:w-[360px]">
+            {brand}
+            <div className="scrollbar-thin relative flex-1 overflow-y-auto">{sidebar}</div>
+          </aside>
+        ) : (
+          <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
+            <SheetContent side="left" aria-describedby={undefined}>
+              <SheetTitle className="sr-only">Data and strategy</SheetTitle>
+              {brand}
+              <div className="relative flex-1 overflow-y-auto">{sidebar}</div>
+              {s && <div className="border-t p-3"><Button className="w-full" onClick={() => setPanelOpen(false)}>Show results · {inr(s.netInr)}</Button></div>}
+            </SheetContent>
+          </Sheet>
+        )}
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="flex h-14 shrink-0 items-center gap-1 border-b bg-background/80 px-3 backdrop-blur sm:px-4">
+            <Button variant="ghost" size="icon-sm" onClick={() => setPanelOpen(!panelOpen)} aria-controls="strategy" aria-expanded={panelOpen}
+              aria-label={panelOpen ? "Hide data and strategy" : "Show data and strategy"} title="Data and strategy">
+              {panelOpen && wide ? <PanelLeftClose /> : <PanelLeftOpen />}
+            </Button>
+            <Separator orientation="vertical" className="mx-2 !h-5" />
+            <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
+              <span className="hidden truncate text-muted-foreground sm:inline">{file.symbol} · {intervalLabel(file.interval)}</span>
+              <span className="hidden text-muted-foreground sm:inline" aria-hidden="true">/</span>
+              <span className="truncate font-medium">{TABS.find((t) => t.id === tab)!.label}</span>
+            </nav>
+            <div className="ml-auto flex items-center gap-0.5">
+              <Button variant="ghost" size="icon-sm" onClick={history.undo} disabled={!history.canUndo} aria-label="Undo" title="Undo (⌘Z)"><Undo2 /></Button>
+              <Button variant="ghost" size="icon-sm" onClick={history.redo} disabled={!history.canRedo} aria-label="Redo" title="Redo (⇧⌘Z)"><Redo2 /></Button>
+              <Separator orientation="vertical" className="mx-1.5 !h-5" />
+              <Button variant="ghost" size="icon-sm" asChild><a href="/live" aria-label="Live trading" title="Live positions and orders (Dhan)"><Radio /></a></Button>
+              <Button variant="ghost" size="icon-sm" onClick={() => setHelpOpen(true)} aria-label="Help and shortcuts" title="Help (?)"><CircleHelp /></Button>
+              <Button variant="ghost" size="icon-sm" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`${theme === "dark" ? "Light" : "Dark"} theme`}>
+                {theme === "dark" ? <Sun /> : <Moon />}
+              </Button>
+              <Button size="sm" className="ml-1.5" onClick={saveRun} disabled={!result} title="Save run (⌘S)"><BookmarkPlus /><span className="hidden sm:inline">Save run</span></Button>
+            </div>
+          </header>
+
+          <main className="scrollbar-thin relative flex-1 overflow-y-auto">
+            <div className="mx-auto flex max-w-[1400px] flex-col gap-6 px-4 py-6 sm:px-6">
+              <Hero kind={strategyKind} name={preset ? preset.name : "Custom settings"} description={describe(settings.cfg)}
+                grade={v?.grade} gradeLabel={v?.label} headline={v?.headline} error={runError}
+                net={s?.netInr} returnPct={s?.returnPct} equity={result?.all.equity} capital={account.capital}
+                meta={s ? <>
+                  {s.trades} trades
                   {result?.options === "unavailable" ? " · no option prices, shown as futures"
                     : result?.options ? ` · options${result.options.noData ? ` (${result.options.noData} without option prices skipped)` : ""}` : ""}
                   {busy ? " · updating…" : ""}
                   {result?.dataEnd ? ` · data to ${shortDateTime(result.dataEnd)}` : ""}
-                </span>
-              </>
-            ) : <span className="meta">Running backtest…</span>}
+                </> : "Running backtest…"} />
+
+              <Tabs value={tab} onValueChange={(t) => setTab(t as Tab)} className="gap-5">
+                <div className="scrollbar-none -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+                  <TabsList>
+                    {TABS.map((t, n) => (
+                      <TabsTrigger key={t.id} value={t.id} id={`tab-${t.id}`} title={`${t.label} (${n + 1})`} className="px-2.5">
+                        <t.icon />{t.label}
+                        {counts[t.id] !== undefined && <span className="rounded bg-muted-foreground/15 px-1.5 text-[11px] font-medium leading-4 text-muted-foreground">{counts[t.id]}</span>}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </div>
+
+                <div id="panel" role="tabpanel" aria-labelledby={`tab-${tab}`} aria-busy={busy} tabIndex={-1}
+                  className={cn("@container outline-none transition-opacity", busy && "opacity-60")}>
+                  {!result && !runError && <p className="py-16 text-center text-muted-foreground">Running backtest…</p>}
+                  {result && tab === "overview" && (
+                    <Overview result={result} prev={prevSummary} symbol={file.symbol} capital={account.capital} compound={!!account.compound && account.sizing === "risk"}
+                      oosFrom={settings.oosEnabled ? settings.oosFrom : null} splitDay={splitDay} />
+                  )}
+                  {result && tab === "trades" && <Trades rows={result.all.rows} market={market} focusDay={focusDay} cfg={settings.cfg} />}
+                  {result && tab === "insights" && (
+                    <Insights evaluation={result.all} onPickDay={(d) => { setFocusDay(d); setTab("trades"); }} />
+                  )}
+                  {tab === "optimize" && (
+                    <Sweep key={settings.cfg.strategy} state={sweep} cfg={settings.cfg} hasOos={settings.oosEnabled} onRun={runSweep}
+                      onApply={(patch: Partial<StrategyConfig>) => {
+                        setSettings({ ...settings, cfg: { ...settings.cfg, ...patch } }, false);
+                        setTab("overview");
+                        notify("Applied those settings", { label: "Undo", run: history.undo });
+                      }} />
+                  )}
+                  {tab === "v2" && (
+                    <V2 spec={spec} v1={result} v2={settings.v2} onChange={(v2) => setSettings({ ...settings, v2 })}
+                      onUseEverywhere={() => {
+                        const s2 = withV2(spec, settings.v2);
+                        setSettings({ ...settings, cfg: s2.cfg, [acctKey]: s2.account }, false);
+                        setTab("overview");
+                        notify("V2 settings now apply in every tab", { label: "Undo", run: history.undo });
+                      }} />
+                  )}
+                  {tab === "compare" && (
+                    <Compare runs={runs} onDelete={deleteRun}
+                      onLoad={(st) => {
+                        loadSaved(st);
+                        setTab("overview");
+                        notify("Loaded saved settings", { label: "Undo", run: history.undo });
+                      }} />
+                  )}
+                </div>
+              </Tabs>
+            </div>
+          </main>
         </div>
 
-        <div className="actions">
-          <a className="btn ghost small" href="/live" title="Live positions and orders (Dhan)"><Radio size={15} aria-hidden="true" /> <span className="btn-text">Live</span></a>
-          <button type="button" className="icon-btn" onClick={history.undo} disabled={!history.canUndo} aria-label="Undo" title="Undo (⌘Z)"><UndoIcon /></button>
-          <button type="button" className="icon-btn" onClick={history.redo} disabled={!history.canRedo} aria-label="Redo" title="Redo (⇧⌘Z)"><RedoIcon /></button>
-          <button type="button" className="btn" onClick={saveRun} disabled={!result} title="Save run (⌘S)"><BookmarkIcon /> <span className="btn-text">Save run</span></button>
-          <button type="button" className="icon-btn" onClick={() => setHelpOpen(true)} aria-label="Help and shortcuts" title="Help (?)"><HelpIcon /></button>
-          <button type="button" className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`${theme === "dark" ? "Light" : "Dark"} theme`}>
-            {theme === "dark" ? <SunIcon /> : <MoonIcon />}
-          </button>
-        </div>
-      </header>
-
-      <aside id="strategy" className={panelOpen ? "sidebar open" : "sidebar"} aria-label="Strategy">
-        <div className="sheet-head">
-          <h2>Strategy</h2>
-          <button type="button" className="btn" onClick={() => setPanelOpen(false)}>
-            <CloseIcon /> Show results{s ? ` · ${inr(s.netInr)}` : ""}
-          </button>
-        </div>
-        <StrategyPanel cfg={settings.cfg} account={account} lotSize={file.lotSize} interval={file.interval} file={file}
-          onCfg={(cfg) => setSettings({ ...settings, cfg })}
-          onPreset={(p) => {
-            // Keep the instrument; only move to the preset's timeframe if this instrument has it.
-            const same = p.interval ? files.find((f) => f.symbol === file.symbol && f.interval === p.interval) : undefined;
-            setSettings({ ...settings, cfg: presetConfig(p), file: same?.file ?? settings.file });
-          }}
-          onAccount={(a) => setSettings({ ...settings, [acctKey]: a })}
-          saved={runs.map((r) => ({ id: r.id, name: r.name }))}
-          onLoadSaved={(id) => {
-            const r = runs.find((x) => x.id === id);
-            if (r) { loadSaved(r.settings); notify(`Loaded “${r.name}”`, { label: "Undo", run: history.undo }); }
-          }}
-          lots={result ? lotEstimate(result.all.rows, market ? market.c.c[market.c.c.length - 1] : null, file.lotSize, account) : null} />
-      </aside>
-
-      <main className="main">
-        <DataBar settings={settings} files={files} onChange={setSettings} />
-        <button type="button" className="edit-strategy" onClick={() => setPanelOpen(true)} aria-controls="strategy" aria-expanded={panelOpen}>
-          <SlidersIcon />
-          <span>
-            <b>{preset ? preset.name : "Custom strategy"}</b>
-            <span className="hint">{describe(settings.cfg)} · tap to edit</span>
-          </span>
-        </button>
-
-        <div className="tabs" role="tablist" aria-label="Views" onKeyDown={(e) => {
-          const i = TABS.findIndex((t) => t.id === tab);
-          const next = ({ ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1 } as Record<string, number>)[e.key];
-          if (next === undefined) return;
-          e.preventDefault();
-          const t = TABS[(next + TABS.length) % TABS.length];
-          setTab(t.id);
-          document.getElementById(`tab-${t.id}`)?.focus();
-        }}>
-          {TABS.map((t, n) => (
-            <button key={t.id} id={`tab-${t.id}`} role="tab" aria-selected={tab === t.id} aria-controls="panel"
-              tabIndex={tab === t.id ? 0 : -1} className="tab" onClick={() => setTab(t.id)} title={`${t.label} (${n + 1})`}>
-              <t.icon size={15} strokeWidth={1.85} aria-hidden="true" />{t.label}
-              {t.id === "compare" && runs.length > 0 && <span className="badge">{runs.length}</span>}
-            </button>
-          ))}
-        </div>
-
-        <div id="panel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="content" aria-busy={busy} tabIndex={-1}>
-          {!result && !runError && <p className="empty">Running backtest…</p>}
-          {result && tab === "overview" && (
-            <Overview result={result} prev={prevSummary} symbol={file.symbol} capital={account.capital} compound={!!account.compound && account.sizing === "risk"}
-              oosFrom={settings.oosEnabled ? settings.oosFrom : null} splitDay={splitDay} />
-          )}
-          {result && tab === "trades" && <Trades rows={result.all.rows} market={market} focusDay={focusDay} cfg={settings.cfg} />}
-          {result && tab === "insights" && (
-            <Insights evaluation={result.all} onPickDay={(d) => { setFocusDay(d); setTab("trades"); }} />
-          )}
-          {tab === "optimize" && (
-            <Sweep key={settings.cfg.strategy} state={sweep} cfg={settings.cfg} hasOos={settings.oosEnabled} onRun={runSweep}
-              onApply={(patch: Partial<StrategyConfig>) => {
-                setSettings({ ...settings, cfg: { ...settings.cfg, ...patch } }, false);
-                setTab("overview");
-                notify("Applied those settings", { label: "Undo", run: history.undo });
-              }} />
-          )}
-          {tab === "v2" && (
-            <V2 spec={spec} v1={result} v2={settings.v2} onChange={(v2) => setSettings({ ...settings, v2 })}
-              onUseEverywhere={() => {
-                const s2 = withV2(spec, settings.v2);
-                setSettings({ ...settings, cfg: s2.cfg, [acctKey]: s2.account }, false);
-                setTab("overview");
-                notify("V2 settings now apply in every tab", { label: "Undo", run: history.undo });
-              }} />
-          )}
-          {tab === "compare" && (
-            <Compare runs={runs} onDelete={deleteRun}
-              onLoad={(st) => {
-                loadSaved(st);
-                setTab("overview");
-                notify("Loaded saved settings", { label: "Undo", run: history.undo });
-              }} />
-          )}
-        </div>
-      </main>
-
-      <Help open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <Toast toast={toast} onDone={() => setToast(null)} />
-    </div>
+        <Help open={helpOpen} onClose={() => setHelpOpen(false)} />
+        <Toast toast={toast} onDone={() => setToast(null)} />
+      </div>
+    </TooltipProvider>
   );
 }
 
@@ -375,6 +407,18 @@ function useHistory<T>(init: () => T) {
     setH((x) => (x.future.length ? { past: [...x.past, x.present], present: x.future[0], future: x.future.slice(1) } : x));
   }, []);
   return useMemo(() => ({ ...h, set, undo, redo, canUndo: h.past.length > 0, canRedo: h.future.length > 0 }), [h, set, undo, redo]);
+}
+
+/** Whether a media query matches, kept live. */
+function useMedia(query: string): boolean {
+  const [on, setOn] = useState(() => matchMedia(query).matches);
+  useEffect(() => {
+    const m = matchMedia(query);
+    const f = () => setOn(m.matches);
+    m.addEventListener("change", f);
+    return () => m.removeEventListener("change", f);
+  }, [query]);
+  return on;
 }
 
 /** `value`, but only turns true once it has stayed true for `ms`. */

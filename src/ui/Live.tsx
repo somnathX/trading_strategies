@@ -107,22 +107,22 @@ export function Live() {
   const pendingOrders = orders.filter((o) => PENDING.includes(o.orderStatus));
 
   return (
-    <div className="app live-page">
-      <header className="topbar">
-        <div className="brand">
+    <div className="shell live-page">
+      <header className="appbar">
+        <div className="appbar-brand">
           <LogoIcon />
-          <div className="brand-text">
+          <span className="live-id">
             <h1>Live trading</h1>
-            <p>Dhan account · {data ? `updated ${new Date(data.at).toLocaleTimeString("en-IN", { hour12: false })}` : "connecting…"}</p>
-          </div>
+            <span className="hint">Dhan account · {data ? `updated ${new Date(data.at).toLocaleTimeString("en-IN", { hour12: false })}` : "connecting…"}</span>
+          </span>
         </div>
-        <div className="status" aria-live="polite">
+        <div className="live-status" aria-live="polite">
           {data && <>
-            <span className={`big ${tone(realized + unrealized)}`}>{inr(realized + unrealized)}</span>
-            <span className="meta">today · {open.length} open · {pendingOrders.length} pending order{pendingOrders.length === 1 ? "" : "s"}</span>
+            <span className={`live-big ${tone(realized + unrealized)}`}>{inr(realized + unrealized)}</span>
+            <span className="hint">today · {open.length} open · {pendingOrders.length} pending order{pendingOrders.length === 1 ? "" : "s"}</span>
           </>}
         </div>
-        <div className="actions">
+        <div className="appbar-actions">
           <a className="btn ghost small" href="/"><ArrowLeft size={15} aria-hidden="true" /> Backtester</a>
           <label className="live-auto" title={`Refresh every ${REFRESH_MS / 1000} s while this tab is visible`}>
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Auto

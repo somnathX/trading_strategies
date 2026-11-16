@@ -14,7 +14,8 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "isolatedModules": true,
-    "types": ["node", "vite/client"]
+    "types": ["node", "vite/client"],
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src", "scripts", "vite.config.ts"]
 }

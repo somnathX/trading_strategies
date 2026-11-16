@@ -1,10 +1,15 @@
-import type { ReactNode } from "react";
+import { ChevronDown, RotateCcw } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { NativeSelect } from "@/components/ui/input";
 import { DEFAULT_ACCOUNT, DEFAULT_US_ACCOUNT, type AccountConfig } from "../engine/metrics";
 import { DEFAULT_CONFIG, type StrategyConfig, type Triple } from "../engine/types";
 import { Field, More, Num, Segmented, Switch, TimeOrOff } from "./controls";
 import { cur, group } from "./format";
 import { matchPreset, presetsFor, type Preset } from "./presets";
 import { isUsd, sessionOf, type DataFile } from "./settings";
+import { load, save } from "./storage";
 import type { LotEstimate } from "./analysis";
 
 /** Strike interval of the indices we have option prices for (scripts/fetch-options.ts). */
@@ -50,18 +55,18 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
   const n0 = trend || selling ? 3 : 6; // steps before the shared sizing / charges steps
 
   return (
-    <div className="panel">
-      <div className="panel-head">
-        <Segmented label="Strategy" value={cfg.strategy}
+    <div className="flex flex-col">
+      <div className="flex flex-col gap-4 border-b p-4">
+        <Segmented label="Strategy" stacked value={cfg.strategy}
           onChange={(v) => set({ strategy: v, ...(v === "option_sell" && { slippagePoints: 0.5 }) })} // per leg; the presets assume it
           options={[
             { value: "orb", label: "Range breakout", hint: "Opening range breakout, intraday" },
             { value: "ma_supertrend", label: "MA + SuperTrend", hint: "Moving-average cross, SuperTrend exit" },
             { value: "option_sell", label: "Option selling", hint: "Weekly calendars, strangles, condors" },
           ]} />
-        <label className="field">
-          <span className="label">Start from</span>
-          <select value={preset?.id ?? "custom"} onChange={(e) => {
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-medium text-foreground/90">Start from</span>
+          <NativeSelect value={preset?.id ?? "custom"} onChange={(e) => {
             const v = e.target.value;
             if (v.startsWith("saved:")) return onLoadSaved(v.slice(6));
             const p = presets.find((x) => x.id === v);
@@ -76,8 +81,8 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
                 {saved.map((r) => <option key={r.id} value={`saved:${r.id}`}>{r.name}</option>)}
               </optgroup>
             )}
-          </select>
-          <span className="hint">{preset ? preset.description : "Edited from a preset. Pick one to start over."}</span>
+          </NativeSelect>
+          <span className="text-xs leading-relaxed text-muted-foreground">{preset ? preset.description : "Edited from a preset. Pick one to start over."}</span>
         </label>
       </div>
 
@@ -87,7 +92,7 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
         <Segmented label="Range length" hideLabel value={cfg.orbMinutes}
           options={[15, 30, 45, 60].map((m) => ({ value: m, label: `${m} min` }))} onChange={(v) => set({ orbMinutes: v })} />
         {interval > cfg.orbMinutes && (
-          <p className="field-warn" role="status">On {interval}-minute candles the range is the whole first candle (09:15–{interval === 60 ? "10:15" : `+${interval}m`}), and entries start from the next one.</p>
+          <p className={WARN} role="status">On {interval}-minute candles the range is the whole first candle (09:15–{interval === 60 ? "10:15" : `+${interval}m`}), and entries start from the next one.</p>
         )}
       </Step>
 
@@ -120,7 +125,7 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
           description="Longs only above the day's VWAP, shorts only below." />
         {cfg.requireStrongCandle && (
           <More label="Candle thresholds">
-            <div className="row2">
+            <div className="grid grid-cols-2 gap-3">
               <Field label="Min body"><Num value={cfg.minBodyRatio} min={0} max={1} step={0.05} onChange={(v) => set({ minBodyRatio: v })} /></Field>
               <Field label="Max wick"><Num value={cfg.maxWickRatio} min={0} max={1} step={0.05} onChange={(v) => set({ maxWickRatio: v })} /></Field>
             </div>
@@ -154,9 +159,9 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
             {cfg.exitMode === "fib_tsl" && <Triple label="Trail steps (of the range)" value={cfg.tslRatchetFibs} step={0.05} onChange={(v) => set({ tslRatchetFibs: v })} />}
             <Checks label="Close everything at" value={cfg.tpFullExit} onChange={(v) => set({ tpFullExit: v })} />
             <Checks label="Close all if reached before lower targets" value={cfg.tpFirstTouchFullExit} onChange={(v) => set({ tpFirstTouchFullExit: v })} />
-            <div className="field">
-              <span className="label">Only take each target after</span>
-              <div className="row3">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[13px] font-medium text-foreground/90">Only take each target after</span>
+              <div className="grid grid-cols-3 gap-2">
                 {cfg.tpAfterTime.map((v, k) => (
                   <TimeOrOff key={k} label={`Target ${k + 1} not before`} value={v}
                     onChange={(t) => set({ tpAfterTime: replace(cfg.tpAfterTime, k, t) })} />
@@ -203,7 +208,7 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
         {!usd && !selling && <Segmented label="Trade with" value={account.vehicle ?? "futures"} onChange={(v) => setAcc({ vehicle: v })}
           options={[{ value: "futures", label: "Futures" }, { value: "options", label: "Buy options" }, { value: "sell", label: "Sell options" }]} />}
         {sell && (step
-          ? <div className="row2">
+          ? <div className="grid grid-cols-2 gap-3">
               <Field label="Out of the money" hint={otm ? `${otm} × ${step} = ${otm * step} pts` : "At the money"}>
                 <Num value={otm} min={0} max={15} step={1} suffix="strikes" onChange={(v) => setAcc({ otmStrikes: Math.round(v) })} />
               </Field>
@@ -211,9 +216,9 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
                 <Num value={account.minDte ?? 7} min={0} max={25} step={1} suffix="days" onChange={(v) => setAcc({ minDte: Math.round(v) })} />
               </Field>
             </div>
-          : <p className="field-warn" role="status">Option prices are only available for NIFTY and BANKNIFTY. {file.symbol} runs as futures.</p>)}
+          : <p className={WARN} role="status">Option prices are only available for NIFTY and BANKNIFTY. {file.symbol} runs as futures.</p>)}
         {opt && (step
-          ? <div className="row2">
+          ? <div className="grid grid-cols-2 gap-3">
               <Field label="In the money" hint={`${itm} × ${step} = ${itm * step} pts`}>
                 <Num value={itm} min={0} max={15} step={1} suffix="strikes" onChange={(v) => setAcc({ itmStrikes: Math.round(v) })} />
               </Field>
@@ -221,7 +226,7 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
                 <Num value={account.minDte ?? 7} min={0} max={25} step={1} suffix="days" onChange={(v) => setAcc({ minDte: Math.round(v) })} />
               </Field>
             </div>
-          : <p className="field-warn" role="status">Option prices are only available for NIFTY and BANKNIFTY. {file.symbol} runs as futures.</p>)}
+          : <p className={WARN} role="status">Option prices are only available for NIFTY and BANKNIFTY. {file.symbol} runs as futures.</p>)}
         <Field label="Capital"><Num value={account.capital} min={1000} step={usd ? 5000 : 50000} suffix={cur()} onChange={(v) => setAcc({ capital: v })} /></Field>
         <Segmented label="Sizing" hideLabel value={account.sizing} onChange={(v) => setAcc({ sizing: v })}
           options={[{ value: "risk", label: "% risk per trade" }, { value: "fixed", label: "Fixed lots" }]} />
@@ -268,7 +273,7 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
         ? `${cfg.slippagePoints + account.exitSlippagePoints} pts slippage per round trip, $${account.feePerLot ?? 0} per contract per side in fees.`
         : `${cfg.slippagePoints + account.exitSlippagePoints} pts slippage per round trip, STT ${account.sttSellPct}% on the sell side, ₹${account.brokeragePerOrder} per order.`}>
         <More label="Slippage and charges">
-          <div className="row2">
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Entry slippage"><Num value={cfg.slippagePoints} min={0} step={0.5} suffix="pts" onChange={(v) => set({ slippagePoints: v })} /></Field>
             <Field label="Exit slippage"><Num value={account.exitSlippagePoints} min={0} step={0.5} suffix="pts" onChange={(v) => setAcc({ exitSlippagePoints: v })} /></Field>
             {usd ? <Field label="Fees / contract / side" info="Commission plus exchange and regulatory fees for one contract, one side. MES at IBKR is about $0.62; ES about $2.25.">
@@ -284,14 +289,14 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
             <Field label="GST"><Num value={account.gstPct} min={0} step={1} suffix="%" onChange={(v) => setAcc({ gstPct: v })} /></Field>
             </>}
           </div>
-          <p className="hint">{usd ? "US index-futures defaults (CME micro E-mini). Check them against your broker." : "Index-futures defaults. Check them against a recent contract note."}</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">{usd ? "US index-futures defaults (CME micro E-mini). Check them against your broker." : "Index-futures defaults. Check them against a recent contract note."}</p>
         </More>
       </Step>
 
-      <div className="panel-foot">
-        <button type="button" className="btn ghost" onClick={() => { onCfg(DEFAULT_CONFIG); onAccount(usd ? DEFAULT_US_ACCOUNT : DEFAULT_ACCOUNT); }}>
-          Reset everything to defaults
-        </button>
+      <div className="p-4">
+        <Button variant="outline" className="w-full" onClick={() => { onCfg(DEFAULT_CONFIG); onAccount(usd ? DEFAULT_US_ACCOUNT : DEFAULT_ACCOUNT); }}>
+          <RotateCcw /> Reset everything to defaults
+        </Button>
       </div>
     </div>
   );
@@ -308,7 +313,7 @@ function SellSteps({ cfg, set, symbol, hasData }: { cfg: StrategyConfig; set: (p
   const off = (v: number) => (v > 0 ? v : 0);
   return (
     <>
-      {!hasData && <p className="field-warn" role="status">Weekly option prices are only available for NIFTY and BANKNIFTY. Pick one of them to run this strategy; {symbol} has no trades.</p>}
+      {!hasData && <p className={WARN} role="status">Weekly option prices are only available for NIFTY and BANKNIFTY. Pick one of them to run this strategy; {symbol} has no trades.</p>}
       <Step n={1} title="What to sell" text={`${STRUCTURES[cfg.sellStructure]} Strikes sit ${cfg.sellWidth ? `${cfg.sellWidth} expected weekly move${cfg.sellWidth === 1 ? "" : "s"}` : "at the money, 0 moves"} from the index, where one move = index × at-the-money IV × √(time to expiry).`}>
         <Segmented label="Structure" hideLabel value={cfg.sellStructure} onChange={(v) => set({ sellStructure: v })}
           options={[
@@ -316,7 +321,7 @@ function SellSteps({ cfg, set, symbol, hasData }: { cfg: StrategyConfig; set: (p
             { value: "strangle", label: "Strangle", hint: "Sell a call and a put, unhedged" },
             { value: "iron_condor", label: "Iron condor", hint: "Strangle with hedges further out" },
           ]} />
-        <div className="row2">
+        <div className="grid grid-cols-2 gap-3">
           <Field label="Strikes away from the index" info="In expected weekly moves. At VIX 13 with 5 days left, one move on Nifty is about 2%, roughly 450 points.">
             <Num value={cfg.sellWidth} min={0} max={3} step={0.25} suffix="moves" onChange={(v) => set({ sellWidth: Math.max(0, v) })} />
           </Field>
@@ -331,7 +336,7 @@ function SellSteps({ cfg, set, symbol, hasData }: { cfg: StrategyConfig; set: (p
       <Step n={2} title="When to enter" text={`At the close of the first trading day after each weekly expiry${cfg.ivMin || cfg.ivMax
         ? `, only when at-the-money IV (close to India VIX) is ${cfg.ivMin && cfg.ivMax ? `between ${cfg.ivMin}% and ${cfg.ivMax}%` : cfg.ivMin ? `at least ${cfg.ivMin}%` : `at most ${cfg.ivMax}%`}. Other weeks are skipped.`
         : ", every week."}`}>
-        <div className="row2">
+        <div className="grid grid-cols-2 gap-3">
           <Field label="IV at least" hint={cfg.ivMin ? undefined : "Off"}><Num value={cfg.ivMin} min={0} max={60} step={1} suffix="%" onChange={(v) => set({ ivMin: off(v) })} /></Field>
           <Field label="IV at most" hint={cfg.ivMax ? undefined : "Off"}><Num value={cfg.ivMax} min={0} max={60} step={1} suffix="%" onChange={(v) => set({ ivMax: off(v) })} /></Field>
         </div>
@@ -342,7 +347,7 @@ function SellSteps({ cfg, set, symbol, hasData }: { cfg: StrategyConfig; set: (p
         : ""}. Prices are daily closes, so stops are checked once a day.`}>
         <Segmented label="Close" value={cfg.exitDaysBefore} onChange={(v) => set({ exitDaysBefore: v })}
           options={[0, 1, 2, 3].map((n) => ({ value: n, label: n ? `${n} day${n > 1 ? "s" : ""} before` : "At expiry" }))} />
-        <div className="row2">
+        <div className="grid grid-cols-2 gap-3">
           <Field label="Profit target" hint={cfg.targetPct ? undefined : "Off"}><Num value={cfg.targetPct} min={0} max={500} step={5} suffix="%" onChange={(v) => set({ targetPct: off(v) })} /></Field>
           <Field label="Stop loss" hint={cfg.stopPct ? undefined : "Off"}><Num value={cfg.stopPct} min={0} max={500} step={10} suffix="%" onChange={(v) => set({ stopPct: off(v) })} /></Field>
         </div>
@@ -359,11 +364,11 @@ function TrendSteps({ cfg, set, open, close }: { cfg: StrategyConfig; set: (p: P
       <Step n={1} title="Entry signal" text={`Buy when the ${cfg.maFast} ${ma} crosses above the ${cfg.maSlow} ${ma} while SuperTrend is green; sell short when it crosses below while SuperTrend is red. The averages are used only to enter.`}>
         <Segmented label="Average type" hideLabel value={cfg.maType} onChange={(v) => set({ maType: v })}
           options={[{ value: "ema", label: "EMA", hint: "Exponential: reacts faster" }, { value: "sma", label: "SMA", hint: "Simple average" }]} />
-        <div className="row2">
+        <div className="grid grid-cols-2 gap-3">
           <Field label="Fast"><Num value={cfg.maFast} min={2} step={1} suffix="bars" onChange={(v) => set({ maFast: Math.round(v) })} /></Field>
           <Field label="Slow"><Num value={cfg.maSlow} min={3} step={1} suffix="bars" onChange={(v) => set({ maSlow: Math.round(v) })} /></Field>
         </div>
-        {cfg.maFast >= cfg.maSlow && <p className="field-warn" role="alert">The fast average should be shorter than the slow one.</p>}
+        {cfg.maFast >= cfg.maSlow && <p className={WARN} role="alert">The fast average should be shorter than the slow one.</p>}
         <Switch label="Re-enter when SuperTrend turns back" checked={cfg.trendReenterOnFlip} onChange={(v) => set({ trendReenterOnFlip: v })}
           description={cfg.trendReenterOnFlip
             ? `After SuperTrend flips a trade out, buy again when it turns back to the trade's colour, as long as the ${cfg.maFast} ${ma} is still on the same side of the ${cfg.maSlow} ${ma}. No new cross needed.`
@@ -371,7 +376,7 @@ function TrendSteps({ cfg, set, open, close }: { cfg: StrategyConfig; set: (p: P
       </Step>
 
       <Step n={2} title="Direction and exit" text={`SuperTrend (ATR ${cfg.stPeriod}, × ${cfg.stMultiplier}) sets the direction. A position closes at the end of the candle where SuperTrend flips against it. Its line at entry is the initial stop used for sizing. Computed on every candle ${open}–${close}, like a chart.`}>
-        <div className="row2">
+        <div className="grid grid-cols-2 gap-3">
           <Field label="ATR period"><Num value={cfg.stPeriod} min={2} step={1} suffix="bars" onChange={(v) => set({ stPeriod: Math.round(v) })} /></Field>
           <Field label="Multiplier" info="How many ATRs the SuperTrend line sits from price. Higher = fewer flips, later exits.">
             <Num value={cfg.stMultiplier} min={0.5} step={0.5} suffix="× ATR" onChange={(v) => set({ stMultiplier: v })} />
@@ -406,9 +411,9 @@ function LotsNote({ lots, lotSize, capital, unit, premium }: { lots: LotEstimate
   const s = (n: number) => `${n} ${unit}${n === 1 ? "" : "s"}`;
   const perLot = lots.stopPts * lotSize; // money lost per lot if the stop is hit
   return (
-    <div className="lots-note" role="status">
+    <div className="flex flex-col gap-1 rounded-lg border bg-muted/40 p-3 text-[13px]" role="status">
       <p><b>≈ {s(lots.median)} per trade</b>{lots.max > lots.min ? ` (${lots.min}–${lots.max} in this run)` : " in this run"}.</p>
-      <p className="hint">
+      <p className="text-xs leading-relaxed text-muted-foreground">
         The stop is usually {Math.round(lots.stopPts)} {premium ? "premium points" : "points"} away, so each {unit} risks about {cur()}{group(perLot)}
         {" "}(≈{((perLot / capital) * 100).toFixed(1)}% of capital). Every extra {unit} needs that much more risk %.
         {lots.maxNow !== null && ` Capital can carry up to ${s(lots.maxNow)} at today's price.`}
@@ -440,24 +445,37 @@ function replace<T>(arr: Triple<T>, k: number, v: T): Triple<T> {
   return out;
 }
 
+/** Which steps are expanded, by title; remembered across visits. Collapsed steps still say what they're set to. */
+const OPEN_KEY = "orb:open-steps";
+const openSteps = new Set<string>(load<string[]>(OPEN_KEY, ["Entry signal", "Entry", "What to sell", "Position size"]));
+const WARN = "rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs leading-relaxed text-warn";
+
 function Step({ n, title, text, children }: { n: number; title: string; text: string; children: ReactNode }) {
+  const [open, setOpen] = useState(() => openSteps.has(title));
   return (
-    <section className="step" aria-labelledby={`step-${n}`}>
-      <div className="step-head">
-        <span className="step-n" aria-hidden="true">{n}</span>
-        <h2 id={`step-${n}`}>{title}</h2>
-      </div>
-      <p className="step-text">{text}</p>
-      <div className="step-body">{children}</div>
-    </section>
+    <Collapsible open={open} onOpenChange={(o) => {
+      setOpen(o);
+      if (o) openSteps.add(title); else openSteps.delete(title);
+      save(OPEN_KEY, [...openSteps]);
+    }} className="group/step border-b">
+      <CollapsibleTrigger className="flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none">
+        <span className="mt-px flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold text-muted-foreground group-data-[state=open]/step:border-info group-data-[state=open]/step:bg-info group-data-[state=open]/step:text-white" aria-hidden="true">{n}</span>
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="text-sm font-semibold leading-tight">{title}</span>
+          <span className="line-clamp-2 text-xs leading-relaxed text-muted-foreground group-data-[state=open]/step:line-clamp-none">{text}</span>
+        </span>
+        <ChevronDown className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/step:rotate-180" aria-hidden="true" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex flex-col gap-4 px-4 pt-1 pb-5 pl-12">{children}</CollapsibleContent>
+    </Collapsible>
   );
 }
 
 function Triple({ label, value, step, onChange }: { label: string; value: Triple<number>; step: number; onChange: (v: Triple<number>) => void }) {
   return (
-    <div className="field">
-      <span className="label">{label}</span>
-      <div className="row3">
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[13px] font-medium text-foreground/90">{label}</span>
+      <div className="grid grid-cols-3 gap-2">
         {value.map((v, k) => (
           <Num key={k} label={`${label}, target ${k + 1}`} value={v} step={step} min={0} onChange={(x) => onChange(replace(value, k, x))} />
         ))}
@@ -468,12 +486,12 @@ function Triple({ label, value, step, onChange }: { label: string; value: Triple
 
 function Checks({ label, value, onChange }: { label: string; value: Triple<boolean>; onChange: (v: Triple<boolean>) => void }) {
   return (
-    <fieldset className="field plain">
-      <legend className="label">{label}</legend>
-      <div className="row3">
+    <fieldset className="flex flex-col gap-1.5">
+      <legend className="mb-1.5 text-[13px] font-medium text-foreground/90">{label}</legend>
+      <div className="grid grid-cols-3 gap-2">
         {value.map((v, k) => (
-          <label key={k} className="check">
-            <input type="checkbox" checked={v} onChange={(e) => onChange(replace(value, k, e.target.checked))} />
+          <label key={k} className="flex cursor-pointer items-center gap-2 text-[13px]">
+            <input type="checkbox" className="size-4 accent-[var(--info)]" checked={v} onChange={(e) => onChange(replace(value, k, e.target.checked))} />
             <span>Target {k + 1}</span>
           </label>
         ))}

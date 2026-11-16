@@ -5,7 +5,13 @@ import { verdict } from "./analysis";
 import { EquityChart, type ChartSeries } from "./charts";
 import { Info } from "./controls";
 import { fmtISO, inr, inrShort, num, pct, tone } from "./format";
-import { CloseIcon, SparkIcon } from "./icons";
+import { Sparkles, X } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { NativeSelect } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import { heatStyle, metric, METRICS } from "./metricsMeta";
 import { load, save } from "./storage";
 import { dayOf, dayToISO } from "../engine/market";
@@ -35,43 +41,95 @@ export function Overview({ result, prev, symbol, capital, oosFrom, splitDay, com
   const s = all.summary;
 
   return (
-    <div className="stack">
+    <div className="flex flex-col gap-5">
       <Welcome />
 
-      <section className={`verdict ${v.grade}`} aria-labelledby="verdict-h">
-        <div className="verdict-head">
-          <span className="grade">{v.label}</span>
-          <h2 id="verdict-h">{v.headline}</h2>
-        </div>
-        <ul className="verdict-points">
-          {v.points.map((p, i) => (
-            <li key={i} className={p.tone}>
-              <span className="dot" aria-hidden="true" />
-              <span><span className="sr-only">{{ good: "Good: ", bad: "Problem: ", warn: "Caution: ", neutral: "" }[p.tone]}</span>{p.text}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <div className="kpis">
+      <section aria-label="Key numbers" className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border @xl:grid-cols-4 @7xl:grid-cols-8">
         {TILES.map((k) => <Kpi key={k} k={k} s={s} prev={prev} />)}
-      </div>
-
-      <section className="card" aria-labelledby="equity-h">
-        <div className="card-head">
-          <h2 id="equity-h">Account value</h2>
-          <span className="hint">From {inr(capital)}. The gap to the dashed line is what charges and exit slippage took.</span>
-        </div>
-        <EquityChart series={series} drawdown={drawdown} splitDay={inSample ? splitDay : null}
-          label={`Account value from ${inr(capital)} to ${inr(capital + s.netInr)}; before charges ${inr(capital + s.grossInr)}; buy and hold ${inr(benchmark[benchmark.length - 1]?.equity ?? capital)}.`} />
       </section>
+
+      <div className="grid gap-5 @5xl:grid-cols-[minmax(0,1fr)_340px]">
+        <Card className="gap-3 pb-3">
+          <CardHeader>
+            <CardTitle id="equity-h">Account value</CardTitle>
+            <CardDescription>From {inr(capital)}. The gap to the dashed line is what charges and exit slippage took.</CardDescription>
+          </CardHeader>
+          <CardContent className="px-3">
+            <EquityChart series={series} drawdown={drawdown} splitDay={inSample ? splitDay : null} height={380}
+              label={`Account value from ${inr(capital)} to ${inr(capital + s.netInr)}; before charges ${inr(capital + s.grossInr)}; buy and hold ${inr(benchmark[benchmark.length - 1]?.equity ?? capital)}.`} />
+          </CardContent>
+        </Card>
+
+        <div className="grid content-start gap-5 @3xl:grid-cols-2 @5xl:grid-cols-1">
+          <Card aria-labelledby="verdict-h">
+            <CardHeader>
+              <CardTitle id="verdict-h">Why “{v.label.toLowerCase()}”</CardTitle>
+              <CardAction><Badge variant={GRADE[v.grade]} className="uppercase tracking-wide">{v.label}</Badge></CardAction>
+            </CardHeader>
+            <CardContent>
+              <p className="sr-only">{v.headline}</p>
+              <ul className="flex flex-col gap-2.5">
+                {v.points.map((p, i) => (
+                  <li key={i} className="grid grid-cols-[10px_1fr] gap-2.5 text-[13px] leading-relaxed text-muted-foreground">
+                    <span className={cn("mt-[7px] size-2 rounded-full", { good: "bg-pos", bad: "bg-neg", warn: "rotate-45 rounded-[2px] bg-warn", neutral: "bg-muted-foreground" }[p.tone])} aria-hidden="true" />
+                    <span><span className="sr-only">{{ good: "Good: ", bad: "Problem: ", warn: "Caution: ", neutral: "" }[p.tone]}</span>{p.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+          <Edge s={s} />
+        </div>
+      </div>
 
       {inSample && outOfSample && <SplitTable inSample={inSample} outOfSample={outOfSample} oosFrom={oosFrom!} />}
 
-      <section className="card" aria-labelledby="monthly-h">
+      <Card aria-labelledby="monthly-h">
         <MonthlyTable rows={all.rows} capital={capital} compound={compound} />
-      </section>
+      </Card>
     </div>
+  );
+}
+
+const GRADE = { good: "pos", mixed: "warn", bad: "neg" } as const;
+
+/** How wins and losses compare: count split, average size, and what's left per trade. */
+function Edge({ s }: { s: Summary }) {
+  const wins = Math.round((s.trades * s.winRate) / 100), losses = s.trades - wins;
+  const big = Math.max(Math.abs(s.avgWinInr), Math.abs(s.avgLossInr), 1);
+  const row = (label: string, value: string, cls?: string, bar?: { w: number; c: string }) => (
+    <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1.5 text-[13px]">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={cn("font-semibold num", cls)}>{value}</dd>
+      {bar && <span className="col-span-2 h-1.5 overflow-hidden rounded-full bg-muted"><span className={cn("block h-full rounded-full", bar.c)} style={{ width: `${bar.w}%` }} /></span>}
+    </div>
+  );
+  return (
+    <Card aria-labelledby="edge-h">
+      <CardHeader>
+        <CardTitle id="edge-h">Edge</CardTitle>
+        <CardAction><span className="text-xs text-muted-foreground">{s.trades} trades</span></CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div>
+          <div className="flex h-2.5 gap-[3px] overflow-hidden rounded-full" role="img" aria-label={`${wins} winning and ${losses} losing trades`}>
+            <span className="min-w-1 bg-pos" style={{ flexGrow: wins || 0.001 }} />
+            <span className="min-w-1 bg-neg" style={{ flexGrow: losses || 0.001 }} />
+          </div>
+          <div className="mt-2 flex justify-between text-xs text-muted-foreground">
+            <span><b className="text-pos">{wins}</b> wins · {pct(s.winRate, 0)}</span>
+            <span><b className="text-neg">{losses}</b> losses</span>
+          </div>
+        </div>
+        <dl className="flex flex-col gap-3">
+          {row("Average win", inrShort(s.avgWinInr), "text-pos", { w: (100 * Math.abs(s.avgWinInr)) / big, c: "bg-pos" })}
+          {row("Average loss", inrShort(s.avgLossInr), "text-neg", { w: (100 * Math.abs(s.avgLossInr)) / big, c: "bg-neg" })}
+          {row("Net per trade", inrShort(s.expectancyInr), tone(s.expectancyInr))}
+          {row("Profit factor", num(s.profitFactor, 2))}
+          {row("Longest losing streak", String(s.maxConsecLosses))}
+        </dl>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -94,17 +152,17 @@ function Kpi({ k, s, prev }: { k: MetricKey; s: Summary; prev: Summary | null })
   };
   const colored = k === "netInr" || k === "cagrPct" || k === "sharpe";
   return (
-    <div className="kpi" title={m.fmt(value)}>
-      <span className="kpi-label">{m.label}<Info label={m.label} text={m.explain} /></span>
-      <span className={`kpi-value ${colored ? tone(value) : ""}`}>{(m.short ?? m.fmt)(value)}</span>
-      <span className="kpi-foot">
-        <span className="kpi-sub">{sub[k]}</span>
+    <div className="flex min-w-0 flex-col gap-1 bg-card px-4 py-3.5" title={m.fmt(value)}>
+      <span className="flex items-center gap-1 text-xs text-muted-foreground">{m.label}<Info label={m.label} text={m.explain} /></span>
+      <span className={cn("truncate text-2xl font-semibold tracking-tight num", colored && tone(value))}>{(m.short ?? m.fmt)(value)}</span>
+      <span className="flex min-w-0 items-center justify-between gap-2">
+        <span className="truncate text-xs text-muted-foreground">{sub[k]}</span>
         {showDelta && (
-          <span className={`delta ${k === "trades" ? "neutral" : improved ? "up" : "down"}`} title="Change from your previous settings">
+          <Badge variant={k === "trades" ? "secondary" : improved ? "pos" : "neg"} className="px-1.5 py-0 num" title="Change from your previous settings">
             <span aria-hidden="true">{delta > 0 ? "▲" : "▼"}</span>
             <span className="sr-only">{k === "trades" ? (delta > 0 ? "more" : "fewer") : improved ? "better" : "worse"} than previous settings by</span>
             {(m.short ?? m.fmt)(Math.abs(delta)).replace(/^[−-]/, "")}
-          </span>
+          </Badge>
         )}
       </span>
     </div>
@@ -117,46 +175,46 @@ function Welcome() {
   const [hidden, setHidden] = useState(() => load(WELCOME_KEY, false));
   if (hidden) return null;
   return (
-    <aside className="welcome" aria-label="How to use this">
-      <SparkIcon />
-      <div>
-        <p><b>Change any strategy setting and the results update instantly.</b> Each tile shows how much it moved from your previous settings, and ⌘Z / Ctrl+Z undoes a change.</p>
-        <p className="hint">Keep an out-of-sample period on: tune while watching the earlier dates, then check the result holds on the held-back ones. Press <kbd>?</kbd> for shortcuts.</p>
+    <aside aria-label="How to use this" className="flex items-start gap-3 rounded-xl border border-info/25 bg-info/5 px-4 py-3">
+      <Sparkles className="mt-0.5 size-4 shrink-0 text-info" aria-hidden="true" />
+      <div className="flex flex-col gap-1 text-[13px]">
+        <p><b className="font-medium">Change any strategy setting and the results update instantly.</b> Each tile shows how much it moved from your previous settings, and ⌘Z / Ctrl+Z undoes a change.</p>
+        <p className="text-muted-foreground">Keep an out-of-sample period on: tune while watching the earlier dates, then check the result holds on the held-back ones. Press <kbd>?</kbd> for shortcuts.</p>
       </div>
-      <button type="button" className="icon-btn" aria-label="Dismiss introduction" onClick={() => { setHidden(true); save(WELCOME_KEY, true); }}>
-        <CloseIcon />
-      </button>
+      <Button variant="ghost" size="icon-sm" className="-mt-1 -mr-2 ml-auto" aria-label="Dismiss introduction" onClick={() => { setHidden(true); save(WELCOME_KEY, true); }}>
+        <X />
+      </Button>
     </aside>
   );
 }
 
 function SplitTable({ inSample, outOfSample, oosFrom }: { inSample: Evaluation; outOfSample: Evaluation; oosFrom: string }) {
   return (
-    <section className="card" aria-labelledby="split-h">
-      <div className="card-head">
-        <h2 id="split-h">Before vs after {fmtISO(oosFrom)}</h2>
-        <span className="hint">If the right column is much worse, the settings are fitted to the past.</span>
-      </div>
-      <div className="table-wrap">
-        <table className="table">
-          <thead><tr><th scope="col">Metric</th><th scope="col" className="num">In-sample</th><th scope="col" className="num">Out-of-sample</th></tr></thead>
-          <tbody>
+    <Card aria-labelledby="split-h">
+      <CardHeader>
+        <CardTitle id="split-h">Before vs after {fmtISO(oosFrom)}</CardTitle>
+        <CardDescription>If the right column is much worse, the settings are fitted to the past.</CardDescription>
+      </CardHeader>
+      <CardContent className="px-2">
+        <Table>
+          <TableHeader><TableRow><TableHead>Metric</TableHead><TableHead className="text-right">In-sample</TableHead><TableHead className="text-right">Out-of-sample</TableHead></TableRow></TableHeader>
+          <TableBody>
             {METRICS.map((m) => {
               const a = inSample.summary[m.key];
               const b = outOfSample.summary[m.key];
               const worse = m.better === "high" ? b < a : b > a;
               return (
-                <tr key={m.key}>
-                  <th scope="row">{m.label}</th>
-                  <td className="num">{m.fmt(a)}</td>
-                  <td className={`num strong ${worse ? "neg" : "pos"}`}>{m.fmt(b)}</td>
-                </tr>
+                <TableRow key={m.key}>
+                  <TableCell className="text-muted-foreground">{m.label}</TableCell>
+                  <TableCell className="text-right num">{m.fmt(a)}</TableCell>
+                  <TableCell className={cn("text-right font-semibold num", worse ? "text-neg" : "text-pos")}>{m.fmt(b)}</TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
-      </div>
-    </section>
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -219,40 +277,40 @@ function MonthlyTable({ rows, capital, compound }: { rows: Evaluation["rows"]; c
   const label = (k: string) => `${MONTHS[Number(k.slice(5)) - 1]} ${k.slice(0, 4)}`;
   return (
     <>
-      <div className="card-head">
-        <h2 id="monthly-h">Monthly returns</h2>
-        <span className="hint">{MONTH_VIEWS.find((v) => v.value === view)!.hint}, by the month each trade closed</span>
-      </div>
-      <div className="monthly-tools">
-        <select aria-label="Show" value={view} onChange={(e) => pick(e.target.value as MonthView)}>
-          {MONTH_VIEWS.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
-        </select>
+      <CardHeader>
+        <CardTitle id="monthly-h">Monthly returns</CardTitle>
+        <CardDescription>{MONTH_VIEWS.find((v) => v.value === view)!.hint}, by the month each trade closed</CardDescription>
+        <CardAction>
+          <NativeSelect aria-label="Show" className="h-8 w-auto text-[13px]" value={view} onChange={(e) => pick(e.target.value as MonthView)}>
+            {MONTH_VIEWS.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
+          </NativeSelect>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 px-2">
         {best && worst && (
-          <span className="hint">
+          <p className="px-3 text-xs text-muted-foreground">
             {up} of {months.length} months profitable · best {label(best[0])} {inrShort(best[1].net)} · worst {label(worst[0])} {inrShort(worst[1].net)}
-          </span>
+          </p>
         )}
-      </div>
-      <div className="table-wrap">
-        <table className="table heat">
-          <thead><tr><th scope="col">Year</th>{MONTHS.map((m) => <th key={m} scope="col" className="num">{m}</th>)}<th scope="col" className="num">Year</th></tr></thead>
-          <tbody>
+        <Table className="border-separate border-spacing-[3px] text-xs">
+          <TableHeader className="[&_tr]:border-0"><TableRow className="hover:bg-transparent"><TableHead className="h-8">Year</TableHead>{MONTHS.map((m) => <TableHead key={m} className="h-8 text-right">{m}</TableHead>)}<TableHead className="h-8 text-right">Year</TableHead></TableRow></TableHeader>
+          <TableBody>
             {years.map((y) => {
               const ms = MONTHS.map((_, i) => byMonth.get(`${y}-${String(i + 1).padStart(2, "0")}`));
               const total = value(sum(ms.filter((m): m is M => !!m)), [...startOf.keys()].find((k) => k.startsWith(y)) ?? null); // compounding: of the year's start
               return (
-                <tr key={y}>
-                  <th scope="row">{y}</th>
+                <TableRow key={y} className="border-0 hover:bg-transparent">
+                  <TableCell className="px-2 py-2 font-medium text-muted-foreground">{y}</TableCell>
                   {ms.map((m, i) => m === undefined
-                    ? <td key={i} className="num muted" />
-                    : <td key={i} className="num" style={shade(value(m, mk(y, i)))}>{fmt(value(m, mk(y, i)))}</td>)}
-                  <td className={`num strong ${view === "trades" ? "" : view === "win" ? tone(total - 50) : view === "costs" ? "neg" : tone(total)}`}>{fmt(total, true)}</td>
-                </tr>
+                    ? <TableCell key={i} className="rounded bg-muted/40 px-2 py-2" />
+                    : <TableCell key={i} className="rounded px-2 py-2 text-right num" style={shade(value(m, mk(y, i)))}>{fmt(value(m, mk(y, i)))}</TableCell>)}
+                  <TableCell className={cn("px-2 py-2 text-right font-semibold num", view === "trades" ? "" : view === "win" ? tone(total - 50) : view === "costs" ? "neg" : tone(total))}>{fmt(total, true)}</TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </CardContent>
     </>
   );
 }

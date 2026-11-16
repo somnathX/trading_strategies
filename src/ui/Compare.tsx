@@ -60,7 +60,7 @@ export function Compare({ runs, onDelete, onLoad }: {
             <article key={r.id} className={`run-card${on ? "" : " off"}`}>
               <label className="run-pick">
                 <input type="checkbox" checked={on} onChange={() => toggle(r.id)} aria-label={`Show ${r.name} on the chart`} />
-                <span className="run-swatch" style={{ borderTopColor: on && n >= 0 ? `var(--series-${(n % 6) + 1})` : "var(--border-strong)",
+                <span className="run-swatch" style={{ borderTopColor: on && n >= 0 ? `var(--chart-${(n % 6) + 1})` : "var(--border)",
                   borderTopStyle: n > 0 ? "dashed" : "solid" }} aria-hidden="true" />
                 <span className="run-name">{r.name}</span>
               </label>

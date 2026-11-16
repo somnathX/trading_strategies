@@ -1,42 +1,33 @@
-import { useEffect, useRef } from "react";
-import { CloseIcon } from "./icons";
+import { useEffect } from "react";
+import { X } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { METRICS } from "./metricsMeta";
 
 const SHORTCUTS: [string, string][] = [
   ["⌘Z / Ctrl+Z", "Undo the last change"],
   ["⇧⌘Z / Ctrl+Y", "Redo"],
   ["⌘S / Ctrl+S", "Save the current run for comparison"],
-  ["1 – 5", "Switch view: Overview, Trades, Insights, Optimize, Saved"],
+  ["1 – 6", "Switch view: Overview, Trades, Insights, Optimize, Saved, V2"],
   ["← / →", "Previous / next trade in the trade chart (Esc closes it)"],
   ["?", "Open this help"],
 ];
 
 /** Shortcuts, glossary and the backtest's assumptions, in a native modal dialog. */
 export function Help({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const d = ref.current;
-    if (!d) return;
-    if (open && !d.open) d.showModal();
-    if (!open && d.open) d.close();
-  }, [open]);
-
+  const h3 = "mt-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase";
+  const pair = "grid gap-0.5 sm:grid-cols-[150px_1fr] sm:gap-3";
   return (
-    <dialog ref={ref} className="help" aria-labelledby="help-h" onClose={onClose}
-      onClick={(e) => e.target === ref.current && onClose()}>
-      <div className="help-inner">
-        <div className="help-head">
-          <h2 id="help-h">How this works</h2>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close help" autoFocus><CloseIcon /></button>
-        </div>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-2xl gap-4" aria-describedby={undefined}>
+        <DialogHeader><DialogTitle>How this works</DialogTitle></DialogHeader>
 
-        <h3>Keyboard</h3>
-        <dl className="shortcuts">
-          {SHORTCUTS.map(([k, v]) => <div key={k}><dt><kbd>{k}</kbd></dt><dd>{v}</dd></div>)}
+        <h3 className={h3}>Keyboard</h3>
+        <dl className="grid gap-2 text-sm">
+          {SHORTCUTS.map(([k, v]) => <div key={k} className={pair}><dt><kbd>{k}</kbd></dt><dd className="text-muted-foreground">{v}</dd></div>)}
         </dl>
 
-        <h3>What the backtest assumes</h3>
-        <ul className="assumptions">
+        <h3 className={h3}>What the backtest assumes</h3>
+        <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm text-muted-foreground">
           <li>Signals use 5- or 15-minute candles of the spot index or stock; P&amp;L is in futures lots of the current lot size.</li>
           <li>Entries fill at the signal candle's close plus slippage. Stops and targets are checked from the next candle on.</li>
           <li>If a candle touches both the stop and a target, the stop is assumed to come first. Gaps through the stop fill at the open.</li>
@@ -45,14 +36,14 @@ export function Help({ open, onClose }: { open: boolean; onClose: () => void }) 
           <li>Slippage: entry slippage is built into the entry price (it lowers the points); exit slippage is shown with the charges. Charges: brokerage per order, STT on the sell side, exchange and SEBI fees, stamp duty on the buy side, GST, at today’s rates for every year tested.</li>
         </ul>
 
-        <h3>Glossary</h3>
-        <dl className="glossary">
-          {METRICS.map((m) => <div key={m.key}><dt>{m.label}</dt><dd>{m.explain}</dd></div>)}
-          <div><dt>Out-of-sample</dt><dd>Recent dates held back from tuning. Results that hold up there are more likely to be real.</dd></div>
-          <div><dt>Opening range</dt><dd>The high and low of the first minutes after the 09:15 open.</dd></div>
+        <h3 className={h3}>Glossary</h3>
+        <dl className="grid gap-2.5 text-sm">
+          {METRICS.map((m) => <div key={m.key} className={pair}><dt className="font-medium">{m.label}</dt><dd className="text-muted-foreground">{m.explain}</dd></div>)}
+          <div className={pair}><dt className="font-medium">Out-of-sample</dt><dd className="text-muted-foreground">Recent dates held back from tuning. Results that hold up there are more likely to be real.</dd></div>
+          <div className={pair}><dt className="font-medium">Opening range</dt><dd className="text-muted-foreground">The high and low of the first minutes after the 09:15 open.</dd></div>
         </dl>
-      </div>
-    </dialog>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -77,7 +68,7 @@ export function Toast({ toast, onDone }: { toast: ToastMsg | null; onDone: () =>
           {toast.action && (
             <button type="button" className="toast-action" onClick={() => { toast.action!.run(); onDone(); }}>{toast.action.label}</button>
           )}
-          <button type="button" className="icon-btn small" aria-label="Dismiss" onClick={onDone}><CloseIcon /></button>
+          <button type="button" className="icon-btn small" aria-label="Dismiss" onClick={onDone}><X /></button>
         </div>
       )}
     </div>

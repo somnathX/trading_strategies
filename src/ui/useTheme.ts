@@ -26,19 +26,31 @@ export interface ChartTheme {
   series: string[];
 }
 
+/** Any CSS colour (oklch, color-mix…) as #rrggbb / rgba(), which the chart library understands: paint a pixel, read it back. */
+const probe = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+function resolve(color: string): string {
+  if (!probe) return color;
+  probe.clearRect(0, 0, 1, 1);
+  probe.fillStyle = color;
+  probe.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = probe.getImageData(0, 0, 1, 1).data;
+  const hex = (n: number) => n.toString(16).padStart(2, "0");
+  return a === 255 ? `#${hex(r)}${hex(g)}${hex(b)}` : `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
+}
+
 function read(): ChartTheme {
   const css = getComputedStyle(document.documentElement);
-  const v = (name: string) => css.getPropertyValue(name).trim();
+  const v = (name: string) => resolve(css.getPropertyValue(name).trim());
   return {
-    bg: v("--surface"),
-    text: v("--text-2"),
-    grid: v("--grid"),
+    bg: v("--card"),
+    text: v("--muted-foreground"),
+    grid: v("--chart-grid"),
     up: v("--pos"),
     down: v("--neg"),
-    accent: v("--accent"),
-    muted: v("--text-3"),
+    accent: v("--info"),
+    muted: v("--muted-foreground"),
     border: v("--border"),
-    series: [1, 2, 3, 4, 5, 6].map((n) => v(`--series-${n}`)),
+    series: [1, 2, 3, 4, 5, 6].map((n) => v(`--chart-${n}`)),
   };
 }
 

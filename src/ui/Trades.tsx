@@ -4,10 +4,18 @@ import type { TradeRow } from "../engine/metrics";
 import { trendSeries } from "../engine/trend";
 import type { StrategyConfig } from "../engine/types";
 import { finalExit } from "./analysis";
-import { TradeChart, type TrendOverlay } from "./charts";
+import { type TrendOverlay } from "./charts";
+import { ProChart } from "./ProChart";
 import { date, fmtISO, inr, num, time, tone } from "./format";
 import { Segmented } from "./controls";
-import { ArrowIcon, CloseIcon } from "./icons";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { NativeSelect } from "@/components/ui/input";
+import { Table, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { cn } from "@/lib/utils";
 import { EXIT_LABELS } from "./metricsMeta";
 import { load, save } from "./storage";
 
@@ -42,7 +50,7 @@ const held = (r: TradeRow, bar: number) => {
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`;
 };
 const Two = ({ top, sub }: { top: ReactNode; sub?: ReactNode }) => (
-  <span className="when"><span>{top}</span>{sub && <span className="when-sub">{sub}</span>}</span>
+  <span className="flex flex-col leading-snug"><span>{top}</span>{sub && <span className="text-xs text-muted-foreground">{sub}</span>}</span>
 );
 
 /** Why it closed, in a few words. Ladder exits ("tp1+stop") name the last step and list the earlier ones. */
@@ -60,8 +68,8 @@ const REENTRY: Record<string, string> = { next_day: "next-day re-entry", st_back
 const Expiry = ({ r }: { r: TradeRow }) => {
   const left = isoToDay(r.option!.expiry) - isoToDay(r.sessionDate);
   return (
-    <span className={`exp-chip${left === 0 ? " today" : ""}`} title={`Expiry ${fmtISO(r.option!.expiry)}, ${left} day${left === 1 ? "" : "s"} after entry`}>
-      {fmtISO(r.option!.expiry, false)}<span className="exp-left">{left === 0 ? "0DTE" : `${left}d`}</span>
+    <span className="ml-2 inline-flex h-[18px] items-center gap-1.5 rounded border bg-muted/60 px-1.5 align-[1px] text-[11px] font-medium text-muted-foreground" title={`Expiry ${fmtISO(r.option!.expiry)}, ${left} day${left === 1 ? "" : "s"} after entry`}>
+      {fmtISO(r.option!.expiry, false)}<span className={cn("border-l pl-1.5", left === 0 && "font-semibold text-warn")}>{left === 0 ? "0DTE" : `${left}d`}</span>
     </span>
   );
 };
@@ -101,8 +109,8 @@ const cols = (bar: number, cfg: StrategyConfig): Col[] => [
     return <Two top={date(t0)} sub={`${time(t0)} → ${out} · ${held(r, bar)}`} />;
   } },
   { key: "traded", label: "Trade", get: (r) => `${r.side} ${traded(r)}`, render: (r) => (
-    <span className="trade-cell">
-      <span className={`side-tag ${r.side}`}>{r.side}</span>
+    <span className="flex items-center gap-2.5">
+      <SideTag side={r.side} />
       <Two top={<>{traded(r)}{r.option && <Expiry r={r} />}</>} sub={<>
         <span title={sizingWhy(r)}>
           {r.lots}{r.marginCapped ? "*" : ""} lot{r.lots > 1 ? "s" : ""} · {r.qty} qty
@@ -227,7 +235,7 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
     if (next) setSelected(next.entryTime);
   };
 
-  if (!rows.length) return <p className="empty">No trades to list. Loosen the entry filters or widen the dates.</p>;
+  if (!rows.length) return <p className="py-16 text-center text-muted-foreground">No trades to list. Loosen the entry filters or widen the dates.</p>;
 
   return (
     <>
@@ -236,58 +244,99 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
           pos={`${index + 1} / ${view.length}`} onMove={index < 0 ? undefined : move} canPrev={index > 0} canNext={index < view.length - 1}
           onClose={() => setSelected(null)} />
       )}
-      <section className="card list" aria-labelledby="trades-h">
-        <div className="card-head">
-          <h2 id="trades-h">{view.length} trades <span className={`muted ${tone(total)}`}>· {inr(total)}</span><span className="hint"> · click a trade to chart it</span></h2>
-          <div className="filters">
-            <select aria-label="Side" value={side} onChange={(e) => setSide(e.target.value as typeof side)}>
-              <option value="all">Both sides</option><option value="long">Long</option><option value="short">Short</option>
-            </select>
-            <select aria-label="Result" value={result} onChange={(e) => setResult(e.target.value as typeof result)}>
-              <option value="all">Wins &amp; losses</option><option value="win">Wins</option><option value="loss">Losses</option>
-            </select>
+      <Card aria-labelledby="trades-h" className="gap-4 pb-0">
+        <div className="flex flex-wrap items-end justify-between gap-x-5 gap-y-3 px-5">
+          <div className="flex flex-col gap-1">
+            <h2 id="trades-h" className="flex items-baseline gap-2.5 text-base font-semibold">{view.length} trades <span className={cn("text-sm", tone(total))}>{inr(total)}</span></h2>
+            <p className="text-xs text-muted-foreground">Click a trade to open its chart · ← → step through trades in the chart</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Pills label="Side" value={side} onChange={setSide} options={[["all", "All"], ["long", "Long"], ["short", "Short"]]} />
+            <Pills label="Result" value={result} onChange={setResult} options={[["all", "All"], ["win", "Wins"], ["loss", "Losses"]]} />
             {entries.length > 1 && (
-              <select aria-label="Entry" value={entry} onChange={(e) => setEntry(e.target.value)}>
+              <NativeSelect aria-label="Entry" className="h-8 w-auto text-[13px]" value={entry} onChange={(e) => setEntry(e.target.value)}>
                 <option value="all">Any entry</option>
                 {entries.map((x) => <option key={x} value={x}>{ENTRY_LABELS[x] ?? x}</option>)}
-              </select>
+              </NativeSelect>
             )}
-            <select aria-label="Exit" value={exit} onChange={(e) => setExit(e.target.value)}>
+            <NativeSelect aria-label="Exit" className="h-8 w-auto text-[13px]" value={exit} onChange={(e) => setExit(e.target.value)}>
               <option value="all">Any exit</option>
               {exits.map((x) => <option key={x} value={x}>{EXIT_LABELS[x] ?? x}</option>)}
-            </select>
+            </NativeSelect>
           </div>
         </div>
-        <div className="table-wrap tall">
-          <table className="table trades">
-            <thead>
-              <tr>
-                {COLS.map((c) => (
-                  <th key={c.key} scope="col" className={c.num ? "num" : ""} aria-sort={sort.key === c.key ? (sort.dir === 1 ? "ascending" : "descending") : "none"}>
-                    <button type="button" onClick={() => setSort({ key: c.key, dir: sort.key === c.key ? (-sort.dir as 1 | -1) : c.num ? -1 : 1 })}>
-                      {c.label}{sort.key === c.key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody ref={tbody}>
-              {view.map((r) => (
-                <tr key={r.entryTime} aria-selected={r.entryTime === selected} tabIndex={0} onClick={() => setSelected(r.entryTime)}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(r.entryTime); } }}>
-                  {COLS.map((c) => (
-                    <td key={c.key} className={`col-${c.key} ${c.num ? "num" : ""} ${c.key === "net" || c.key === "pts" ? tone(c.get(r) as number) : ""}`}>
-                      {c.render ? c.render(r) : String(c.get(r))}
-                    </td>
-                  ))}
-                </tr>
+        <ViewStats rows={view} />
+        <Table wrapClassName="scrollbar-thin max-h-[min(68vh,720px)] overflow-y-auto border-t">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              {COLS.map((c) => (
+                <TableHead key={c.key} scope="col" className={cn(c.num && "text-right", c.key === "in" && "pl-5")} aria-sort={sort.key === c.key ? (sort.dir === 1 ? "ascending" : "descending") : "none"}>
+                  <button type="button" className="inline-flex items-center gap-1 rounded transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                    onClick={() => setSort({ key: c.key, dir: sort.key === c.key ? (-sort.dir as 1 | -1) : c.num ? -1 : 1 })}>
+                    {c.label}{sort.key === c.key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}
+                  </button>
+                </TableHead>
               ))}
-            </tbody>
-          </table>
-          {!view.length && <p className="empty">No trades match these filters.</p>}
-        </div>
-      </section>
+            </TableRow>
+          </TableHeader>
+          <tbody ref={tbody}>
+            {view.map((r) => (
+              <TableRow key={r.entryTime} aria-selected={r.entryTime === selected} data-state={r.entryTime === selected ? "selected" : undefined} tabIndex={0}
+                className="cursor-pointer focus-visible:bg-muted/60 focus-visible:outline-none" onClick={() => setSelected(r.entryTime)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(r.entryTime); } }}>
+                {COLS.map((c) => (
+                  <TableCell key={c.key} className={cn(c.num && "text-right num", c.key === "in" && "pl-5", c.key === "net" && "[&_span:first-child]:font-semibold", (c.key === "net" || c.key === "pts") && tone(c.get(r) as number))}>
+                    {c.render ? c.render(r) : String(c.get(r))}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </tbody>
+        </Table>
+        {!view.length && <p className="pb-10 text-center text-muted-foreground">No trades match these filters.</p>}
+      </Card>
     </>
+  );
+}
+
+/** LONG / SHORT, fixed width so the text after it lines up. */
+const SideTag = ({ side }: { side: string }) => (
+  <span className={cn("inline-flex h-5 w-[54px] shrink-0 items-center justify-center rounded text-[10.5px] font-semibold uppercase tracking-wide",
+    side === "long" ? "bg-pos/15 text-pos" : side === "short" ? "bg-neg/15 text-neg" : "bg-muted text-muted-foreground")}>{side}</span>
+);
+
+/** Pill toggle group for a few filter values. */
+function Pills<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void }) {
+  return (
+    <ToggleGroup type="single" aria-label={label} value={value} onValueChange={(v) => v && onChange(v as T)}>
+      {options.map(([v, l]) => <ToggleGroupItem key={v} value={v}>{l}</ToggleGroupItem>)}
+    </ToggleGroup>
+  );
+}
+
+/** Numbers for whatever the filters leave: wins, losses, average, best and worst. */
+function ViewStats({ rows }: { rows: TradeRow[] }) {
+  if (!rows.length) return null;
+  const wins = rows.filter((r) => r.netInr > 0);
+  const net = rows.reduce((a, r) => a + r.netInr, 0);
+  const best = rows.reduce((a, r) => (r.netInr > a.netInr ? r : a));
+  const worst = rows.reduce((a, r) => (r.netInr < a.netInr ? r : a));
+  const items: [string, string, string?][] = [
+    ["Wins", `${wins.length} · ${Math.round((100 * wins.length) / rows.length)}%`, "pos"],
+    ["Losses", String(rows.length - wins.length), "neg"],
+    ["Average", inr(net / rows.length), tone(net)],
+    ["Best", `${inr(best.netInr)} · ${date(best.entryTime).slice(0, 10)}`, "pos"],
+    ["Worst", `${inr(worst.netInr)} · ${date(worst.entryTime).slice(0, 10)}`, "neg"],
+  ];
+  return (
+    <dl className="mx-5 grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border @2xl:grid-cols-5">
+      {items.map(([k, v, c]) => (
+        <div key={k} className="min-w-0 bg-muted/40 px-3.5 py-2.5">
+          <dt className="text-xs text-muted-foreground">{k}</dt>
+          <dd className={cn("mt-0.5 truncate text-sm font-semibold num", c)}>{v}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -309,13 +358,8 @@ function TradeModal({ trade: r, rows, market, trend, cfg, bar, pos, onMove, canP
   trade: TradeRow; rows: TradeRow[]; market: Market | null; trend: TrendOverlay | null; cfg: StrategyConfig; bar: number;
   pos: string; onMove?: (d: number) => void; canPrev: boolean; canNext: boolean; onClose: () => void;
 }) {
-  const dlg = useRef<HTMLDialogElement>(null);
   const [context, setContext] = useState(() => load<number>("orb:trade-context", 0));
   useEffect(() => save("orb:trade-context", context), [context]);
-  useEffect(() => {
-    const d = dlg.current;
-    if (d && !d.open) d.showModal();
-  }, []);
   const ex = useMemo(() => (market ? excursion(market, r) : null), [market, r]);
   const pts = r.option?.pnl ?? r.pnlPoints;
   // R in the traded instrument: premium points against the premium at the stop for options, index points otherwise.
@@ -336,50 +380,55 @@ function TradeModal({ trade: r, rows, market, trend, cfg, bar, pos, onMove, canP
     ["Closed by", c.label, c.after && `after ${c.after}`],
   ];
   return (
-    <dialog ref={dlg} className="trade-modal" aria-labelledby="tm-title" onClose={onClose}
-      onClick={(e) => { if (e.target === e.currentTarget) dlg.current?.close(); }} // backdrop click
-      onKeyDown={(e) => {
-        // ← / → always step trades, even with focus on the range buttons (radios would otherwise take the arrows).
-        if (!onMove || (e.key !== "ArrowLeft" && e.key !== "ArrowRight") || (e.target as HTMLElement).tagName === "SELECT") return;
-        e.preventDefault();
-        if (e.key === "ArrowLeft" && canPrev) onMove(-1);
-        if (e.key === "ArrowRight" && canNext) onMove(1);
-      }}>
-      <div className="tm-inner">
-        <header className="tm-head">
-          <div className="tm-title">
-            <span className={`side-tag ${r.side}`}>{r.side}</span>
-            <h2 id="tm-title">{traded(r)}</h2>
-            <span className="hint">{fmtISO(r.sessionDate)} · {r.lots} lot{r.lots > 1 ? "s" : ""} ({r.qty}){r.reentry ? ` · ${REENTRY[r.reentry]}` : ""}</span>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent hideClose aria-describedby={undefined}
+        className="flex h-[min(940px,calc(100dvh-2rem))] w-[min(1320px,calc(100vw-2rem))] max-w-none flex-col gap-4 p-5 sm:p-6"
+        onKeyDownCapture={(e) => {
+          // ← / → always step trades, even with focus on the range buttons (which would otherwise take the arrows).
+          if (!onMove || (e.key !== "ArrowLeft" && e.key !== "ArrowRight") || (e.target as HTMLElement).tagName === "SELECT") return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.key === "ArrowLeft" && canPrev) onMove(-1);
+          if (e.key === "ArrowRight" && canNext) onMove(1);
+        }}>
+        <header className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b pb-4">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+            <SideTag side={r.side} />
+            <DialogTitle className="text-lg">{traded(r)}</DialogTitle>
+            <span className="text-sm text-muted-foreground">{fmtISO(r.sessionDate)} · {r.lots} lot{r.lots > 1 ? "s" : ""} ({r.qty}){r.reentry ? ` · ${REENTRY[r.reentry]}` : ""}</span>
           </div>
-          <div className="tm-pnl">
-            <span className={`tm-net ${tone(r.netInr)}`}>{inr(r.netInr)}</span>
-            <span className="hint" title={costBreakdown(r)}>{inr(r.grossInr)} gross − {inr(r.chargesInr)} charges − {inr(r.slippageInr)} slippage</span>
+          <div className="flex flex-col items-end">
+            <span className={cn("text-2xl font-semibold tracking-tight num", tone(r.netInr))}>{inr(r.netInr)}</span>
+            <span className="text-xs text-muted-foreground" title={costBreakdown(r)}>{inr(r.grossInr)} gross − {inr(r.chargesInr)} charges − {inr(r.slippageInr)} slippage</span>
           </div>
-          <div className="pager">
-            <button type="button" className="icon-btn" onClick={() => onMove?.(-1)} disabled={!canPrev} aria-label="Previous trade" title="Previous trade (←)"><ArrowIcon dir="left" /></button>
-            <span className="hint mono">{pos}</span>
-            <button type="button" className="icon-btn" onClick={() => onMove?.(1)} disabled={!canNext} aria-label="Next trade" title="Next trade (→)"><ArrowIcon dir="right" /></button>
-            <button type="button" className="icon-btn" onClick={() => dlg.current?.close()} aria-label="Close" title="Close (Esc)"><CloseIcon /></button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon-sm" onClick={() => onMove?.(-1)} disabled={!canPrev} aria-label="Previous trade" title="Previous trade (←)"><ChevronLeft /></Button>
+            <span className="min-w-14 text-center text-xs text-muted-foreground num">{pos}</span>
+            <Button variant="ghost" size="icon-sm" onClick={() => onMove?.(1)} disabled={!canNext} aria-label="Next trade" title="Next trade (→)"><ChevronRight /></Button>
+            <DialogClose asChild><Button variant="ghost" size="icon-sm" aria-label="Close" title="Close (Esc)"><X /></Button></DialogClose>
           </div>
         </header>
-        <dl className="tm-stats">
+        <dl className="grid shrink-0 grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-4 xl:grid-cols-8">
           {stats.map(([k, v, sub, cls]) => (
-            <div key={k}><dt>{k}</dt><dd className={cls}>{v}</dd>{sub && <dd className="tm-sub">{sub}</dd>}</div>
+            <div key={k} className="min-w-0 bg-muted/40 px-3 py-2.5">
+              <dt className="text-xs text-muted-foreground">{k}</dt>
+              <dd className={cn("mt-0.5 truncate text-[15px] font-semibold num", cls)}>{v}</dd>
+              {sub && <dd className="truncate text-xs text-muted-foreground">{sub}</dd>}
+            </div>
           ))}
         </dl>
-        <p className="tm-sizing"><b>Why {r.lots} lot{r.lots === 1 ? "" : "s"}:</b> {sizingWhy(r)}</p>
-        <div className="tm-toolbar">
+        <p className="shrink-0 text-[13px] leading-relaxed text-muted-foreground"><b className="font-semibold text-foreground">Why {r.lots} lot{r.lots === 1 ? "" : "s"}:</b> {sizingWhy(r)}</p>
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
           <Segmented label="Chart range" hideLabel value={context} onChange={setContext}
             options={CONTEXT.map(([label, value]) => ({ label, value }))} />
-          <span className="hint">Scroll to zoom · drag to pan · double-click the price axis to reset</span>
+          <span className="hidden text-xs text-muted-foreground sm:inline">Scroll to zoom · drag to pan · double-click the price axis to reset</span>
         </div>
-        <div className="tm-chart">
-          {market ? <TradeChart market={market} trade={r} trades={rows} trend={trend} context={context} height="100%" />
-            : <p className="empty">Loading candles…</p>}
+        <div className="relative min-h-[440px] flex-1">
+          {market ? <ProChart market={market} trade={r} trades={rows} trend={trend} context={context} height="100%" />
+            : <p className="py-16 text-center text-muted-foreground">Loading candles…</p>}
         </div>
-        <p className="story">{story(r, cfg, bar)}</p>
-      </div>
-    </dialog>
+        <p className="shrink-0 text-[13px] leading-relaxed text-muted-foreground">{story(r, cfg, bar)}</p>
+      </DialogContent>
+    </Dialog>
   );
 }
