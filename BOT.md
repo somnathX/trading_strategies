@@ -36,6 +36,8 @@ Every order carries a correlation id, so if the bot restarts mid-order it picks 
 | `LOT_SIZE` | `65` | Nifty lot size. Update it if NSE changes it; a wrong size gets the order rejected |
 | `ITM_STRIKES` | `6` | Strikes in the money (6 × 50 = 300 points, 8 = 400 points) |
 | `MIN_DTE` | `7` | Skip to the next month when fewer days are left. `0` = always the nearest expiry, `99` = always next month's |
+| `GAP_EXIT` | `0` (off) | Sell at the open when Nifty opens this many points against the trade from yesterday's close (backtest: "Exit at 9:15 on a big gap"). Needs the every-minute schedule |
+| `EXIT_PAST` | `0` (off) | Sell as soon as Nifty is this many points past the SuperTrend line, without waiting for the candle to close (backtest: "Exit early"). Needs the every-minute schedule |
 | `BOT_PAUSED` | unset | Set to anything to stop trading (kill switch) |
 | `BOT_STATE_FILE` | `.bot-state.json` | Where the bot remembers its position on a VM |
 | `UPSTASH_REDIS_REST_URL`/`_TOKEN` (or `KV_REST_API_URL`/`_TOKEN`) | unset | State storage on Vercel |
@@ -65,6 +67,7 @@ Vercel can't place live orders, because Dhan only accepts orders from a static I
 4. Vercel's free cron runs only once a day, so use **cron-job.org** (free) instead. Create a job:
    - **URL:** `https://<your-app>.vercel.app/api/tick`
    - **Schedule:** minutes `1,16,31,46`, hours `9–15`, Mon–Fri, timezone Asia/Kolkata. Runs outside market hours exit immediately.
+     With `GAP_EXIT` or `EXIT_PAST` set, run it **every minute** instead (hours `9–15`): it still acts on candle closes only once, and checks the two exits in between.
    - **Header:** `Authorization: Bearer <BOT_SECRET>`
 
 ## 3. Live trading on a VM with a static IP (Oracle Cloud free tier)
@@ -85,6 +88,8 @@ Vercel can't place live orders, because Dhan only accepts orders from a static I
 4. Add the schedule with `crontab -e`:
    ```
    1,16,31,46 9-15 * * 1-5 cd $HOME/trading_strategies && node --env-file=.env bot-dist/bot.js >> bot.log 2>&1
+   # with GAP_EXIT / EXIT_PAST: every minute instead
+   # * 9-15 * * 1-5 cd $HOME/trading_strategies && node --env-file=.env bot-dist/bot.js >> bot.log 2>&1
    ```
 5. Watch it in paper mode for a while. When live signals and fills look right, change to `BOT_MODE=live` and keep `LOTS=1`.
 

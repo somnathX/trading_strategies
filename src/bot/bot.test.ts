@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -117,4 +117,70 @@ describe.skipIf(!candles)("paper trading against a fake Dhan", () => {
     expect(sent.map((o) => o.price)).toEqual([101.55, 149.25]); // ask + 0.5%, bid − 0.5%, on ₹0.05 ticks
     expect(sent.flatMap((o) => Object.values(o))).not.toContain(""); // Dhan answers DH-905 to "" in typed fields
   }
+});
+
+describe.skipIf(!candles)("exits between candle closes", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // A day's first candle while a long is open (opened on an earlier day, still open after this candle).
+  function setup(extra: Record<string, string>) {
+    const full = buildMarket(candles!);
+    const lastDay = dayOf(candles!.t[candles!.t.length - 1]);
+    const trades = runTrend(full, cfg, lastDay - 365).filter((t) => t.side === "long");
+    let open = -1, trade = trades[0];
+    for (const t of trades) {
+      open = candles!.t.findIndex((x, i) => i > 0 && x > t.entryTime && x + 3600 < t.exitTime && dayOf(x) > dayOf(candles!.t[i - 1]) && dayOf(candles!.t[i - 1]) > dayOf(t.entryTime));
+      if (open > 0) { trade = t; break; }
+    }
+    expect(open).toBeGreaterThan(0);
+    const prev = candles!.t[open - 1], prevClose = candles!.c[open - 1];
+    const dir = mkdtempSync(join(tmpdir(), "bot-"));
+    const env = { DHAN_CLIENT_ID: "1", DHAN_ACCESS_TOKEN: "x.e30.x", BOT_STATE_FILE: join(dir, "state.json"), ...extra };
+    const pos = { side: "long", type: "CE", strike: 24000, expiry: dayToISO(dayOf(candles!.t[open]) + 20), securityId: "240001", qty: 65, entry: 100, openedBar: trade.entryTime };
+    writeFileSync(env.BOT_STATE_FILE, JSON.stringify({ lastBar: prev, pos, heartbeat: dayToISO(dayOf(candles!.t[open])) }));
+    const state = (): State => JSON.parse(readFileSync(env.BOT_STATE_FILE, "utf8"));
+    const market = { spot: prevClose };
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      const body = init.body ? JSON.parse(init.body as string) : {};
+      const json = (j: unknown) => new Response(JSON.stringify(j), { status: 200 });
+      if (url.endsWith("/charts/intraday")) {
+        const n = open + 1; // up to and including the forming first candle; the client drops it as unfinished
+        const s = (a: number[]) => a.slice(Math.max(0, n - 6000), n);
+        return json({ timestamp: s(candles!.t), open: s(candles!.o), high: s(candles!.h), low: s(candles!.l), close: s(candles!.c), volume: s(candles!.v) });
+      }
+      if (url.endsWith("/optionchain")) {
+        expect(body.Expiry).toBe(pos.expiry);
+        return json({ data: { last_price: market.spot, oc: { "24000.000000": { ce: { security_id: 240001, top_bid_price: 90, top_ask_price: 91, last_price: 90 } } } } });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const at = (min: number) => candles!.t[open] + min * 60; // minutes after 09:15
+    return { env, state, market, prevClose, at };
+  }
+
+  it("sells at the open when it gaps GAP_EXIT points against the trade", async () => {
+    const { env, state, market, prevClose, at } = setup({ GAP_EXIT: "100" });
+    market.spot = prevClose - 99;
+    expect(await tick(env, at(1))).toMatch(/No signal/); // 99 pts: wait
+    market.spot = prevClose - 120;
+    expect(await tick(env, at(1))).toMatch(/sold/);
+    expect(state()).toMatchObject({ pos: null, trades: 1, pnl: (90 - 100) * 65 });
+  });
+
+  it("only at the open: a gap rule doesn't fire later in the first candle", async () => {
+    const { env, market, prevClose, at } = setup({ GAP_EXIT: "100" });
+    market.spot = prevClose - 120;
+    expect(await tick(env, at(10))).toMatch(/No signal/);
+  });
+
+  it("sells when Nifty is EXIT_PAST points past the SuperTrend line", async () => {
+    const { env, state, market, at } = setup({ EXIT_PAST: "10" });
+    const series = trendSeries(buildMarket(candles!), cfg);
+    const k = series.bars.findIndex((i) => candles!.t[i] === at(0)) - 1; // the line known before this candle
+    market.spot = series.st.line[k] - 9;
+    expect(await tick(env, at(5))).toMatch(/No signal/);
+    market.spot = series.st.line[k] - 10;
+    expect(await tick(env, at(6))).toMatch(/sold/);
+    expect(state().pos).toBeNull();
+  });
 });

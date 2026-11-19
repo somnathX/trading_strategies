@@ -2,7 +2,8 @@
  * Trading bot for the MA cross + SuperTrend strategy on Nifty, buying deep-ITM monthly options
  * (calls for longs, puts for shorts), the same way the backtester's "Options (ITM)" mode does.
  *
- * One tick() = one check. Run it just after each 15-minute candle closes: 09:16, 09:31 … 15:16 IST.
+ * One tick() = one check. Run it just after each 15-minute candle closes: 09:16, 09:31 … 15:16 IST; or every minute
+ * from 09:15 when GAP_EXIT / EXIT_PAST are set, so it can exit between candle closes the way the backtest does.
  * Signals come from the backtester's own engine code; quotes and orders go through Dhan; alerts to Telegram.
  * Paper mode (the default) does everything except send orders: fills are taken at the current bid/ask.
  *
@@ -50,7 +51,7 @@ interface Quote { securityId: string; bid: number; ask: number; ltp: number; spo
 
 export function settings(env: Env) {
   const preset = PRESETS.find((p) => p.id === (env.BOT_PRESET ?? "top-10"));
-  if (!preset || preset.cfg.strategy !== "ma_supertrend") throw new Error(`BOT_PRESET must be an MA + SuperTrend preset id, e.g. top-10`);
+  if (!preset) throw new Error(`BOT_PRESET must be a preset id, e.g. top-10 or default`);
   const cfg: StrategyConfig = { ...DEFAULT_CONFIG, ...preset.cfg };
   if (cfg.trendCloseEod) throw new Error("Intraday (close at day end) presets aren't supported by the bot");
   const num = (k: string, d: number) => (env[k] ? Number(env[k]) : d);
@@ -63,6 +64,10 @@ export function settings(env: Env) {
     lotSize: num("LOT_SIZE", 65), // Nifty; an order with the wrong lot size is rejected by the exchange, not filled
     itm: num("ITM_STRIKES", 6),
     minDte: num("MIN_DTE", 7),
+    // Exits between candle closes (0 = off): out at the open on a gap this many points against the trade,
+    // or as soon as Nifty is this many points past the SuperTrend line.
+    gapExit: num("GAP_EXIT", cfg.trendGapExit ?? 0),
+    exitPast: num("EXIT_PAST", cfg.trendExitPast ?? 0),
   };
 }
 type Settings = ReturnType<typeof settings>;
@@ -253,7 +258,7 @@ export async function tick(env: Env, now = Date.now() / 1000): Promise<string> {
   const minute = minuteOf(now);
   const today = dayToISO(day);
   const dow = (day + 4) % 7;
-  if (dow === 0 || dow === 6 || minute < 9 * 60 + 16 || minute >= 15 * 60 + 29) return "Market closed; nothing to do";
+  if (dow === 0 || dow === 6 || minute < 9 * 60 + 15 || minute >= 15 * 60 + 29) return "Market closed; nothing to do";
   if (env.BOT_PAUSED || state.paused) return `Paused: ${env.BOT_PAUSED ? "BOT_PAUSED is set" : state.paused}`;
 
   const auto = canGenerate(env);
@@ -307,7 +312,7 @@ export async function tick(env: Env, now = Date.now() / 1000): Promise<string> {
   const spotClose = m.c.c[series.bars[last]];
   const report: string[] = [];
 
-  const close = async (why: string) => {
+  const close = async (why: string, nifty = spotClose) => {
     const p = state.pos!;
     const q = await dhan.quote(p.expiry, p.strike, p.type);
     const fill = await execute(dhan, s, "SELL", { ...q, securityId: p.securityId }, p.qty, `x${p.securityId}-${p.openedBar}`);
@@ -316,7 +321,7 @@ export async function tick(env: Env, now = Date.now() / 1000): Promise<string> {
     state.trades = (state.trades ?? 0) + 1;
     state.pos = null;
     await save();
-    await notify(env, `🔴 SELL ${optName(p)} × ${p.qty} @ ₹${fill.toFixed(2)} (${mode})\n${why} · Nifty ${spotClose.toFixed(0)}\nP&L ${rs(pnl)} (${((fill / p.entry - 1) * 100).toFixed(1)}%) · total ${rs(state.pnl)} over ${state.trades} trades, before charges`);
+    await notify(env, `🔴 SELL ${optName(p)} × ${p.qty} @ ₹${fill.toFixed(2)} (${mode})\n${why} · Nifty ${nifty.toFixed(0)}\nP&L ${rs(pnl)} (${((fill / p.entry - 1) * 100).toFixed(1)}%) · total ${rs(state.pnl)} over ${state.trades} trades, before charges`);
     report.push(`sold ${optName(p)}`);
   };
 
@@ -337,9 +342,26 @@ export async function tick(env: Env, now = Date.now() / 1000): Promise<string> {
     report.push(`bought ${optName(state.pos)}`);
   };
 
+  // Between candle closes, from the live Nifty price: the backtest's "exit at 9:15 on a big gap" and "exit early" rules.
+  const between = (side: Side, spot: number) => {
+    const long = side === "long";
+    const noCandleToday = m.day[series.bars[last]] < day; // so spotClose is yesterday's close
+    const gap = long ? spotClose - spot : spot - spotClose;
+    if (s.gapExit > 0 && noCandleToday && minute < 9 * 60 + 20 && gap >= s.gapExit)
+      return { spot, text: `Gap at the open: ${gap.toFixed(0)} pts against the trade from yesterday's close` };
+    const level = long ? series.st.line[last] - s.exitPast : series.st.line[last] + s.exitPast;
+    if (s.exitPast > 0 && (long ? spot <= level : spot >= level))
+      return { spot, text: `${s.exitPast} pts past the SuperTrend line (${series.st.line[last].toFixed(0)}): not waiting for the candle to close` };
+    return null;
+  };
+
   const ma = `${s.cfg.maType.toUpperCase()} ${s.cfg.maFast}/${s.cfg.maSlow}`;
   try {
     if (exitNow) await close("SuperTrend flipped");
+    else if (state.pos && (s.gapExit > 0 || s.exitPast > 0)) {
+      const why = between(state.pos.side, (await dhan.quote(state.pos.expiry, state.pos.strike, state.pos.type)).spot);
+      if (why) await close(why.text, why.spot);
+    }
     if (!state.pos && side && signalBar > (state.lastBar ?? 0)) {
       await open(side, signalBar, `${ma} crossed ${side === "long" ? "up" : "down"} with SuperTrend ${side === "long" ? "green" : "red"}`);
     } else if (state.pos && state.pos.expiry === today && minute >= 15 * 60) { // expiry day: roll to next month
