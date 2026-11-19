@@ -71,14 +71,13 @@ describe("breakdowns", () => {
 });
 
 describe("presets", () => {
-  it("match on the selected strategy's settings only", async () => {
+  it("match on strategy settings, ignoring slippage and leftovers from removed strategies", async () => {
     const { matchPreset } = await import("./presets");
     const { DEFAULT_CONFIG } = await import("../engine/types");
-    // Opening-range settings were edited earlier, then the user switched to MA + SuperTrend.
-    const cfg = { ...DEFAULT_CONFIG, entryMode: "fib_pullback" as const, orbMinutes: 30, strategy: "ma_supertrend" as const };
-    expect(matchPreset(cfg)?.id).toBe("ma-st");
-    expect(matchPreset({ ...cfg, maFast: 9 })).toBeNull();
-    expect(matchPreset(DEFAULT_CONFIG)?.id).toBe("classic");
+    expect(matchPreset(DEFAULT_CONFIG)?.id).toBe("default");
+    expect(matchPreset({ ...DEFAULT_CONFIG, slippagePoints: 3, orbMinutes: 30 } as typeof DEFAULT_CONFIG)?.id).toBe("default");
+    expect(matchPreset({ ...DEFAULT_CONFIG, maFast: 20, maSlow: 50, stPeriod: 10 })?.id).toBe("ema-20-50");
+    expect(matchPreset({ ...DEFAULT_CONFIG, maFast: 9 })).toBeNull();
   });
 });
 
@@ -119,5 +118,14 @@ describe("monteCarlo", () => {
     const mc = monteCarlo([-1000, -1000, 500], 2_000)!;
     expect(mc.pLoss).toBeGreaterThan(0.5);
     expect(mc.pHalf).toBeGreaterThan(0.5);
+  });
+});
+
+import { nearby } from "./Sweep";
+describe("nearby", () => {
+  it("spreads 0.6× to 1.5× around the value, whole or fractional", () => {
+    expect(nearby(200)).toEqual([120, 160, 200, 250, 300]);
+    expect(nearby(3, false)).toEqual([1.8, 2.4, 3, 3.75, 4.5]);
+    expect(nearby(1)).toEqual([1, 2]);
   });
 });

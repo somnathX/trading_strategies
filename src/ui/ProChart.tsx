@@ -394,21 +394,9 @@ function drawTrade(c: Chart, data: KLineData[], times: number[], trade: TradeRow
 
   const level = (price: number | null, label: string, color: string, dashed = false) =>
     price !== null && add("levelLine", [{ timestamp: first, value: price }], { label, color, dashed });
-  const isTrend = trade.entryStyle === "ma_cross";
-  const sold = trade.option?.legs?.filter((l) => l.qty < 0) ?? [];
-  level(trade.orbHigh, "OR high", th.muted);
-  level(trade.orbLow, "OR low", th.muted);
   level(trade.entryPrice, "Entry", th.accent);
   level(trade.exitPrice, "Exit", won ? th.up : th.down, true);
-  if (sold.length) sold.forEach((l) => level(l.strike, `Sold ${l.type === "CE" ? "call" : "put"}`, th.down, true));
-  else level(trade.stopPrice, isTrend ? "SuperTrend at entry" : "Stop", th.down, true);
-  trade.tp.forEach((p, k) => level(p, `TP${k + 1}`, th.up, true));
-  if (trade.entryStyle === "fib_pullback" && trade.impulseLow !== null && trade.impulseHigh !== null) {
-    const span = trade.impulseHigh - trade.impulseLow;
-    for (const r of [0.382, 0.5, 0.618, 0.786]) {
-      level(trade.side === "long" ? trade.impulseHigh - r * span : trade.impulseLow + r * span, `${(r * 100).toFixed(1)}%`, th.series[2], true);
-    }
-  }
+  level(trade.stopPrice, "SuperTrend at entry", th.down, true);
 
   // Entry / exit markers for every trade in view; the open one in colour.
   const byTime = new Map(data.map((d) => [d.timestamp, d]));

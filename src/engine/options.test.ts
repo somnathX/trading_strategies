@@ -34,8 +34,8 @@ describe("OptionPricer", () => {
   ] };
   const trade = (o: Partial<Trade>): Trade => ({
     sessionDate: d2, side: "long", entryTime: dayStart(isoToDay(d2)) + 10 * 3600, exitTime: dayStart(isoToDay(d2)) + 14 * 3600,
-    entryPrice: 25000, exitPrice: 25200, pnlPoints: 200, outcome: "st_flip", orbHigh: null, orbLow: null, entryStyle: "ma_cross",
-    stopPrice: 24900, tp: [null, null, null], holdDays: 1, maxHoldSessions: 0, impulseLow: null, impulseHigh: null, ...o,
+    entryPrice: 25000, exitPrice: 25200, pnlPoints: 200, outcome: "st_flip", entryStyle: "ma_cross",
+    stopPrice: 24900, holdDays: 1, ...o,
   });
 
   it("buys the call 6 strikes in the money for a long, priced at the previous day's IV", () => {

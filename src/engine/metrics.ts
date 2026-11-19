@@ -159,20 +159,16 @@ export function sizeAndCost(t: Trade, lotSize: number, a: AccountConfig): TradeR
       : Math.max(1, Math.floor((a.capital * a.riskPct) / 100 / (stopPts * lotSize)));
   const overRisk = !!a.skipOverRisk && a.sizing === "risk" && stopPts * lotSize > (a.capital * a.riskPct) / 100;
   // A very tight stop would otherwise ask for more lots than the capital could ever margin.
-  // A sold option blocks margin on the index like a future; a bought one costs its premium; spreads say what they block.
-  const lots = overRisk ? 0 : Math.min(wantedLots, a.maxLots || Infinity, o?.margin
-    ? maxLotsByMargin(o.margin, lotSize, { ...a, marginPct: 100 })
-    : maxLotsByMargin(o?.sell ? t.entryPrice : entry, lotSize, a));
+  // A sold option blocks margin on the index like a future; a bought one costs its premium.
+  const lots = overRisk ? 0 : Math.min(wantedLots, a.maxLots || Infinity, maxLotsByMargin(o?.sell ? t.entryPrice : entry, lotSize, a));
   const qty = lots * lotSize;
   const long = o ? !o.sell : t.side === "long";
   const exitPrice = (o ? o.exit : t.exitPrice) + (long ? -a.exitSlippagePoints : a.exitSlippagePoints);
-  const [buy, sell] = o?.turnover ? [o.turnover.buy * qty, o.turnover.sell * qty]
-    : long ? [entry * qty, exitPrice * qty] : [exitPrice * qty, entry * qty];
+  const [buy, sell] = long ? [entry * qty, exitPrice * qty] : [exitPrice * qty, entry * qty];
   // Brokerage: per executed order, the lower of the flat fee and a % of that order's value.
   const fills = t.outcome.split("+").length + (o ? 2 * o.rolls : 0); // exit orders (partial exits and option rolls count separately)
   const perOrder = (value: number) => Math.min(a.brokeragePerOrder, (value * (a.brokeragePct ?? 100)) / 100);
-  const legs = o?.legs?.length ?? 1; // each option leg is its own order
-  const brokerage = qty === 0 ? 0 : legs * (perOrder(entry * qty) + fills * perOrder((exitPrice * qty) / fills));
+  const brokerage = qty === 0 ? 0 : perOrder(entry * qty) + fills * perOrder((exitPrice * qty) / fills);
   const exchange = ((buy + sell) * a.exchangePct) / 100;
   const sebi = ((buy + sell) * a.sebiPerCrore) / 1e7;
   const chargeParts = {

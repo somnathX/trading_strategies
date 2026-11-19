@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildMarket, isoToDay, type Market } from "./engine/market";
 import type { MetricKey, Summary } from "./engine/metrics";
-import { DEFAULT_CONFIG, type Candles, type StrategyConfig } from "./engine/types";
+import type { Candles, StrategyConfig } from "./engine/types";
 import { Compare, loadRuns, saveRuns, type SavedRun } from "./ui/Compare";
 import { lotEstimate } from "./ui/analysis";
 import { DataSection } from "./ui/ContextBar";
@@ -13,8 +13,8 @@ import { Help, Toast, type ToastMsg } from "./ui/Help";
 import { LogoIcon } from "./ui/icons";
 import { Insights } from "./ui/Insights";
 import { Overview } from "./ui/Overview";
-import { describe, matchPreset, presetConfig, STRATEGIES } from "./ui/presets";
-import { intervalLabel, isUsd, loadSettings, saveSettings, sessionOf, withDerived, type DataFile, type Settings } from "./ui/settings";
+import { describe, matchPreset, presetConfig } from "./ui/presets";
+import { cleanAccount, cleanCfg, intervalLabel, isUsd, loadSettings, saveSettings, sessionOf, withDerived, type DataFile, type Settings } from "./ui/settings";
 import { resample } from "./engine/market";
 import { StrategyPanel } from "./ui/StrategyPanel";
 import { Sweep, type SweepState } from "./ui/Sweep";
@@ -184,8 +184,8 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
   /** Apply a saved run's settings. Runs saved before newer options existed get today's defaults for those. */
   const loadSaved = (st: Partial<Settings>) => setSettings({
     ...settings, ...st,
-    cfg: { ...DEFAULT_CONFIG, ...st.cfg },
-    account: { ...settings.account, ...st.account },
+    cfg: cleanCfg(st.cfg),
+    account: cleanAccount({ ...settings.account, ...st.account }),
     usAccount: { ...settings.usAccount, ...st.usAccount },
     file: st.file && files.some((f) => f.file === st.file) ? st.file : settings.file,
   }, false);
@@ -227,7 +227,6 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
   const preset = matchPreset(settings.cfg);
   const v = useMemo(() => (result ? verdict(result, file.symbol, account.capital, settings.oosEnabled ? settings.oosFrom : null) : null),
     [result, file.symbol, account.capital, settings.oosEnabled, settings.oosFrom]);
-  const strategyKind = STRATEGIES.find((x) => x.value === settings.cfg.strategy)?.label ?? settings.cfg.strategy;
   const counts: Partial<Record<Tab, number>> = { trades: result?.all.rows.length, compare: runs.length || undefined };
 
   const sidebar = (
@@ -253,7 +252,7 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
     <div className="flex h-14 shrink-0 items-center gap-2.5 border-b px-4">
       <LogoIcon />
       <div className="flex min-w-0 flex-col leading-tight">
-        <span className="text-sm font-semibold tracking-tight">ORB Backtester</span>
+        <span className="text-sm font-semibold tracking-tight">Trend Backtester</span>
         <span className="text-xs text-muted-foreground">Data &amp; strategy</span>
       </div>
     </div>
@@ -309,7 +308,7 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
 
           <main className="scrollbar-thin relative flex-1 overflow-y-auto">
             <div className="mx-auto flex max-w-[1400px] flex-col gap-6 px-4 py-6 sm:px-6">
-              <Hero kind={strategyKind} name={preset ? preset.name : "Custom settings"} description={describe(settings.cfg)}
+              <Hero kind="MA cross + SuperTrend" name={preset ? preset.name : "Custom settings"} description={describe(settings.cfg)}
                 grade={v?.grade} gradeLabel={v?.label} headline={v?.headline} error={runError}
                 net={s?.netInr} returnPct={s?.returnPct} equity={result?.all.equity} capital={account.capital}
                 meta={s ? <>
@@ -344,7 +343,7 @@ function Backtester({ files, theme: [theme, setTheme] }: { files: DataFile[]; th
                     <Insights evaluation={result.all} capital={account.capital} onPickDay={(d) => { setFocusDay(d); setTab("trades"); }} />
                   )}
                   {tab === "optimize" && (
-                    <Sweep key={settings.cfg.strategy} state={sweep} cfg={settings.cfg} hasOos={settings.oosEnabled} onRun={runSweep}
+                    <Sweep state={sweep} cfg={settings.cfg} hasOos={settings.oosEnabled} onRun={runSweep}
                       onApply={(patch: Partial<StrategyConfig>) => {
                         setSettings({ ...settings, cfg: { ...settings.cfg, ...patch } }, false);
                         setTab("overview");

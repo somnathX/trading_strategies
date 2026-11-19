@@ -1,44 +1,32 @@
 import { useState } from "react";
 import type { MetricKey } from "../engine/metrics";
-import type { StrategyConfig, StrategyKind } from "../engine/types";
+import type { StrategyConfig } from "../engine/types";
 import type { SweepAxis, SweepCell } from "../worker";
 import { heatStyle, METRICS } from "./metricsMeta";
 
 /** Settings worth sweeping, with sensible starting values (editable in the UI). */
-const SWEEPABLE: { key: keyof StrategyConfig; label: string; values: string; kind?: StrategyKind }[] = [ // no kind = opening range
-  { key: "maFast", label: "Fast average", values: "5, 10, 15, 20, 30", kind: "ma_supertrend" },
-  { key: "maSlow", label: "Slow average", values: "30, 50, 100, 200", kind: "ma_supertrend" },
-  { key: "stPeriod", label: "SuperTrend ATR period", values: "7, 10, 14, 20, 30, 40", kind: "ma_supertrend" },
-  { key: "stMultiplier", label: "SuperTrend multiplier", values: "1, 1.5, 2, 2.5, 3, 4", kind: "ma_supertrend" },
-  { key: "maType", label: "Average type", values: "ema, sma", kind: "ma_supertrend" },
-  { key: "trendCloseEod", label: "Close at day end", values: "false, true", kind: "ma_supertrend" },
-  { key: "trendReenterOnFlip", label: "Re-enter when ST turns back", values: "false, true", kind: "ma_supertrend" },
-  { key: "trendReenter", label: "Re-enter next day (with day-end close)", values: "false, true", kind: "ma_supertrend" },
-  { key: "orbMinutes", label: "Opening range (min)", values: "15, 30, 45, 60" },
-  { key: "stopLevel", label: "Stop / trail × OR", values: "0.382, 0.5, 0.618, 0.786, 1" },
-  { key: "maxTradesPerDay", label: "Max trades / day", values: "1, 2, 3" },
-  { key: "minBodyRatio", label: "Min candle body", values: "0.4, 0.5, 0.55, 0.6, 0.7" },
-  { key: "maxWickRatio", label: "Max candle wick", values: "0.2, 0.3, 0.35, 0.4, 0.5" },
-  { key: "lastEntryTime", label: "No entries from", values: "none, 11:00, 12:00, 13:00, 14:00" },
-  { key: "maxHoldDays", label: "Hold up to (sessions)", values: "1, 2, 3, 5" },
-  { key: "entryMode", label: "Entry mode", values: "breakout, fib_pullback" },
-  { key: "fibEntryLevel", label: "Pullback entry", values: "0.382, 0.5, 0.618" },
-  { key: "fibPullbackStopLevel", label: "Pullback stop", values: "0.618, 0.786, 1" },
-  { key: "minImpulseOrRatio", label: "Min impulse × OR", values: "0.25, 0.5, 1" },
-  { key: "exitMode", label: "Take profit", values: "tp_ladder, fib_tsl, eod" },
-  { key: "stopMode", label: "Stop type", values: "fixed, trail" },
-  { key: "useVwapFilter", label: "VWAP filter", values: "false, true" },
-  { key: "requireStrongCandle", label: "Strong candle", values: "false, true" },
-  { key: "sellWidth", label: "Strikes away (moves)", values: "0, 0.5, 0.75, 1, 1.5", kind: "option_sell" },
-  { key: "sellStructure", label: "Structure", values: "double_calendar, strangle, iron_condor", kind: "option_sell" },
-  { key: "sellWing", label: "Condor hedge (moves)", values: "0.25, 0.5, 1", kind: "option_sell" },
-  { key: "ivMin", label: "IV at least (%)", values: "0, 10, 12, 14", kind: "option_sell" },
-  { key: "ivMax", label: "IV at most (%)", values: "0, 14, 16, 18, 22", kind: "option_sell" },
-  { key: "exitDaysBefore", label: "Exit days before expiry", values: "0, 1, 2, 3", kind: "option_sell" },
-  { key: "targetPct", label: "Profit target %", values: "0, 25, 50, 75", kind: "option_sell" },
-  { key: "stopPct", label: "Stop loss %", values: "0, 40, 100, 200", kind: "option_sell" },
+const SWEEPABLE: { key: keyof StrategyConfig; label: string; values: string }[] = [
+  { key: "maFast", label: "Fast average", values: "3, 5, 8, 10, 15, 20" },
+  { key: "maSlow", label: "Slow average", values: "50, 100, 150, 200, 250" },
+  { key: "stPeriod", label: "SuperTrend ATR period", values: "7, 10, 14, 20, 29, 40" },
+  { key: "stMultiplier", label: "SuperTrend multiplier", values: "1.5, 2, 2.5, 3, 3.5, 4" },
+  { key: "maType", label: "Average type", values: "ema, sma" },
+  { key: "trendReenterOnFlip", label: "Re-enter when ST turns back", values: "false, true" },
+  { key: "trendCloseEod", label: "Close at day end", values: "false, true" },
+  { key: "trendGapExit", label: "Exit at open on a gap (pts)", values: "none, 50, 100, 150, 200" },
+  { key: "trendExitPast", label: "Exit early (pts past ST)", values: "none, 10, 25, 50" },
   { key: "slippagePoints", label: "Entry slippage", values: "0, 1, 2, 3" },
 ];
+
+/** Values around v (×0.6 … ×1.5), so a sweep shows whether the current setting sits on a plateau or a lone peak. */
+export function nearby(v: number, whole = Number.isInteger(v)): number[] {
+  const out = [0.6, 0.8, 1, 1.25, 1.5].map((f) => (whole ? Math.max(1, Math.round(v * f)) : Math.round(v * f * 100) / 100));
+  return [...new Set(out)];
+}
+
+/** Pairs of settings the nearby check sweeps, per strategy. */
+const FRACTIONAL = new Set<keyof StrategyConfig>(["stMultiplier"]); // never round these to whole numbers
+const NEARBY: [keyof StrategyConfig, keyof StrategyConfig, string][] = [["maFast", "maSlow", "Averages"], ["stPeriod", "stMultiplier", "SuperTrend"]];
 
 export function parseValues(text: string): unknown[] {
   return text.split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
@@ -65,9 +53,8 @@ export function Sweep({ state, cfg, hasOos, onRun, onApply }: {
   onRun: (x: SweepAxis, y: SweepAxis, metric: MetricKey) => void;
   onApply: (patch: Partial<StrategyConfig>) => void;
 }) {
-  // Only settings that matter for the current strategy (entry slippage matters for all).
-  const options = SWEEPABLE.filter((s) => s.key === "slippagePoints" || (s.kind ?? "orb") === cfg.strategy);
-  const [x0, y0] = ({ orb: ["orbMinutes", "stopLevel"], ma_supertrend: ["stPeriod", "stMultiplier"], option_sell: ["sellWidth", "stopPct"] } as const)[cfg.strategy];
+  const options = SWEEPABLE;
+  const [x0, y0]: (keyof StrategyConfig)[] = ["stPeriod", "stMultiplier"];
   // Starting values for an axis, always including the current setting so the sweep shows where you are now.
   const valuesFor = (key: keyof StrategyConfig) => {
     const base = SWEEPABLE.find((s) => s.key === key)!.values;
@@ -77,7 +64,7 @@ export function Sweep({ state, cfg, hasOos, onRun, onApply }: {
   };
   const shown = state;
   if (shown && !(options.some((o) => o.key === shown.x.key) && options.some((o) => o.key === shown.y.key))) {
-    state = null; // results from the other strategy
+    state = null; // results for a setting that is no longer offered
   }
   const [xKey, setXKey] = useState<keyof StrategyConfig>(state?.x.key ?? x0);
   const [yKey, setYKey] = useState<keyof StrategyConfig>(state?.y.key ?? y0);
@@ -88,6 +75,8 @@ export function Sweep({ state, cfg, hasOos, onRun, onApply }: {
   const x = { key: xKey, values: parseValues(xVals) };
   const y = { key: yKey, values: parseValues(yVals) };
   const runs = x.values.length * y.values.length;
+  // Nearby check: only pairs whose current values are positive numbers.
+  const nearbyPairs = NEARBY.filter(([a, b]) => typeof cfg[a] === "number" && typeof cfg[b] === "number" && (cfg[a] as number) > 0 && (cfg[b] as number) > 0);
 
   const axisPicker = (label: string, key: keyof StrategyConfig, setKey: (k: keyof StrategyConfig) => void, vals: string, setVals: (v: string) => void) => (
     <div className="axis">
@@ -133,6 +122,18 @@ export function Sweep({ state, cfg, hasOos, onRun, onApply }: {
           </button>
         </div>
         <p className="hint">Look for a broad area of good cells, not the single best one: a lone bright cell is usually luck.</p>
+        {nearbyPairs.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-muted-foreground">Is this a lucky setting? Test the values around yours:</span>
+            {nearbyPairs.map(([a, b, name]) => (
+              <button key={name} type="button" className="btn" onClick={() => {
+                const xa = { key: a, values: nearby(cfg[a] as number, !FRACTIONAL.has(a) && Number.isInteger(cfg[a])) }, yb = { key: b, values: nearby(cfg[b] as number, !FRACTIONAL.has(b) && Number.isInteger(cfg[b])) };
+                setXKey(a); setXVals(xa.values.join(", ")); setYKey(b); setYVals(yb.values.join(", "));
+                setMetric("netInr"); onRun(xa, yb, "netInr");
+              }} title={`Runs ${name.toLowerCase()} from 0.6× to 1.5× of your current values, scored by net P&L`}>{name} ±50%</button>
+            ))}
+          </div>
+        )}
       </div>
 
       {state && <SweepGrid state={{ ...state, metric }} cfg={cfg} fmt={m.fmt} better={m.better} onApply={onApply} />}
@@ -164,6 +165,7 @@ function SweepGrid({ state, cfg, fmt, better, onApply }: {
           <span style={{ width: `${(done / total) * 100}%` }} />
         </div>
       )}
+      {done === total && <Verdict state={state} cfg={cfg} fmt={fmt} />}
       <div className="table-wrap">
         <table className="table heat sweep">
           <thead>
@@ -205,5 +207,26 @@ function HeatCellButton({ strength, text, sub, current, label, onClick }: {
         {sub && <small>{sub}</small>}
       </button>
     </td>
+  );
+}
+
+/** Plain-words read of a finished grid: how many cells made money, and where the current settings rank. */
+function Verdict({ state, cfg, fmt }: { state: SweepState; cfg: StrategyConfig; fmt: (x: number) => string }) {
+  const { x, y, cells, metric } = state;
+  const net = cells.map((c) => c.inSample.netInr).filter(Number.isFinite);
+  if (!net.length) return null;
+  const made = net.filter((v) => v > 0).length;
+  const vals = cells.map((c) => c.inSample[metric]).filter(Number.isFinite).sort((a, b) => b - a);
+  const mine = cells.find((c) => cfg[x.key] === x.values[c.x] && cfg[y.key] === y.values[c.y]);
+  const share = made / net.length;
+  const word = share >= 0.9 ? "Robust" : share >= 0.6 ? "Mostly robust" : "Fragile";
+  const tone = share >= 0.9 ? "text-pos" : share >= 0.6 ? "text-warn" : "text-neg";
+  const rank = mine ? vals.indexOf(mine.inSample[metric]) + 1 : 0;
+  return (
+    <p className="hint" aria-live="polite">
+      <strong className={tone}>{word}:</strong> {made} of {net.length} settings made money.
+      {mine && ` Yours ranks ${rank} of ${vals.length} (${fmt(mine.inSample[metric])}); the weakest got ${fmt(vals[vals.length - 1])}, the median ${fmt(vals[Math.floor(vals.length / 2)])}.`}
+      {share < 0.6 ? " Small changes to the settings flip the result, so the backtest is likely fitted to the past." : rank && rank <= Math.ceil(vals.length * 0.1) && vals.length > 4 ? " Yours is near the top: expect live results closer to the median." : ""}
+    </p>
   );
 }

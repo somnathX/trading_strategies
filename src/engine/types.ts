@@ -11,8 +11,7 @@ export interface Candles {
   v: number[];
 }
 
-export type StrategyKind = "orb" | "ma_supertrend" | "option_sell";
-export type SellStructure = "double_calendar" | "strangle" | "iron_condor";
+export type StrategyKind = "ma_supertrend";
 
 export interface StrategyConfig {
   strategy: StrategyKind;
@@ -36,51 +35,16 @@ export interface StrategyConfig {
   htfFilter: boolean; // a slower SuperTrend (4× the ATR period, ≈ 1 h on 15 m candles) must point the same way
   maGapAtr: number; // fast and slow MA at least this many ATRs apart; 0 = off
   maxReentries: number | null; // "ST turned back" re-entries allowed per MA cross; null = no limit
-  // --- Option selling (weekly, from daily option closes) ---
-  sellStructure: SellStructure;
-  sellWidth: number; // call and put strikes this many expected weekly moves from the index (0 = at the money)
-  sellWing: number; // iron condor: hedges this many expected moves beyond the sold strikes
-  ivMin: number; // % at-the-money IV (≈ India VIX) needed to enter; 0 = no floor
-  ivMax: number; // % above which the week is skipped; 0 = no cap
-  exitDaysBefore: number; // trading days before the weekly expiry to close (0 = at the expiry close)
-  targetPct: number; // close when the profit reaches this % of the premium paid / received (0 = off)
-  stopPct: number; // close when the loss reaches this % of the premium (0 = off)
-  sellExpiry: "weekly" | "monthly"; // which expiry to sell: each week's, or each month's (from the monthly chain)
-  vrpMin: number | null; // enter only when ATM IV − 20-day realised vol ≥ this many vol points; null = off
-  adxMax: number; // enter only when daily ADX(14) ≤ this (a range, not a trend); 0 = off
-  // --- Opening range breakout ---
-  orbMinutes: number; // 15 | 30 | 45 | 60
-  entryMode: "breakout" | "fib_pullback";
-  fibEntryLevel: number; // pullback depth of the impulse leg to enter at
-  fibPullbackStopLevel: number; // stop depth on the impulse leg
-  minImpulseOrRatio: number; // min impulse span vs OR width
-  stopLevel: number; // breakout stop / trail distance, as a fraction of the OR
-  stopMode: "fixed" | "trail";
-  slippagePoints: number; // applied to entry (both strategies); exit slippage lives in costs
-  maxTradesPerDay: number;
-  exitMode: "eod" | "tp_ladder" | "fib_tsl";
-  maxHoldDays: number; // 1 = intraday, 2+ = carry over sessions
-  tpExtensions: Triple<number>;
-  tpSizes: Triple<number>;
-  tpFullExit: Triple<boolean>; // close the remainder when this TP hits
-  tpFirstTouchFullExit: Triple<boolean>; // close all if this TP is touched before lower ones
-  tpAfterTime: Triple<string | null>; // "HH:MM" IST gate per TP
-  tslRatchetFibs: Triple<number>;
-  minBodyRatio: number;
-  maxWickRatio: number;
-  requireStrongCandle: boolean;
-  useVwapFilter: boolean;
-  lastEntryTime: string | null; // "HH:MM" IST: no entries on candles opening at/after
-  swingOppositeOr: "off" | "intraday" | "eod";
-  blockSameDayAfterSwing: boolean;
+  // --- execution ---
+  slippagePoints: number; // applied to entry; exit slippage lives in costs
 }
 
 export const DEFAULT_CONFIG: StrategyConfig = {
-  strategy: "orb",
+  strategy: "ma_supertrend",
   maType: "ema",
-  maFast: 20,
-  maSlow: 50,
-  stPeriod: 10,
+  maFast: 5,
+  maSlow: 200,
+  stPeriod: 29,
   stMultiplier: 3,
   trendCloseEod: false,
   trendReenter: false,
@@ -94,56 +58,8 @@ export const DEFAULT_CONFIG: StrategyConfig = {
   htfFilter: false,
   maGapAtr: 0,
   maxReentries: null,
-  sellStructure: "strangle", // with sellWidth 0: a short straddle (the "short-straddle" preset)
-  sellWidth: 0,
-  sellWing: 0.5,
-  ivMin: 13,
-  ivMax: 0,
-  exitDaysBefore: 0,
-  targetPct: 0,
-  stopPct: 50,
-  sellExpiry: "weekly",
-  vrpMin: null,
-  adxMax: 0,
-  orbMinutes: 15,
-  entryMode: "breakout",
-  fibEntryLevel: 0.5,
-  fibPullbackStopLevel: 0.786,
-  minImpulseOrRatio: 0.25,
-  stopLevel: 0.618,
-  stopMode: "fixed",
   slippagePoints: 1,
-  maxTradesPerDay: 2,
-  exitMode: "tp_ladder",
-  maxHoldDays: 1,
-  tpExtensions: [1.272, 1.618, 2.0],
-  tpSizes: [0.33, 0.33, 0.34],
-  tpFullExit: [false, false, false],
-  tpFirstTouchFullExit: [false, false, false],
-  tpAfterTime: [null, null, null],
-  tslRatchetFibs: [0.618, 0.5, 0.382],
-  minBodyRatio: 0.55,
-  maxWickRatio: 0.35,
-  requireStrongCandle: true,
-  useVwapFilter: false,
-  lastEntryTime: null,
-  swingOppositeOr: "eod",
-  blockSameDayAfterSwing: true,
 };
-
-export interface Signal {
-  side: Side;
-  entryBar: number; // index into the candles
-  entryTime: number;
-  entryPrice: number; // includes entry slippage
-  stopPrice: number;
-  tp: Triple<number | null>;
-  orbHigh: number;
-  orbLow: number;
-  entryStyle: "breakout" | "fib_pullback";
-  impulseLow: number | null;
-  impulseHigh: number | null;
-}
 
 export interface Trade {
   sessionDate: string; // YYYY-MM-DD (IST) of entry
@@ -153,17 +69,12 @@ export interface Trade {
   entryPrice: number;
   exitPrice: number; // average exit across partial fills
   pnlPoints: number; // per unit, after entry slippage, before costs
-  outcome: string; // e.g. "tp1+tp2+eod", "stop", "gap_stop"
-  orbHigh: number | null; // opening-range trades only
-  orbLow: number | null;
-  entryStyle: "breakout" | "fib_pullback" | "ma_cross" | "option_sell";
-  stopPrice: number; // initial stop (SuperTrend level at entry for MA-cross trades)
-  tp: Triple<number | null>;
+  outcome: string; // e.g. "st_flip", "gap", "eod"
+  entryStyle: "ma_cross";
+  stopPrice: number; // initial stop: the SuperTrend line at entry
   holdDays: number;
-  maxHoldSessions: number;
-  impulseLow: number | null;
-  impulseHigh: number | null;
-  reentry?: "next_day" | "st_back" | "late"; // late: a V2 filter blocked the cross, entered once it passed. // MA + SuperTrend, not on a cross: re-opened at the next day's first candle after a
-  // day-end close, or when SuperTrend turned back after a flip exit with the MAs still crossed the trade's way
+  // Not on a cross: re-opened at the next day's first candle after a day-end close (next_day), when SuperTrend turned back
+  // after a flip exit with the MAs still crossed the trade's way (st_back), or once a V2 filter passed (late).
+  reentry?: "next_day" | "st_back" | "late";
   option?: import("./options").OptionLeg; // set when the trade is taken with options instead of futures
 }

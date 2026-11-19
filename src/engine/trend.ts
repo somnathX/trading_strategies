@@ -93,15 +93,9 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
       exitPrice: at,
       pnlPoints: pnl,
       outcome,
-      orbHigh: null,
-      orbLow: null,
       entryStyle: "ma_cross",
       stopPrice: pos!.stop,
-      tp: [null, null, null],
       holdDays: Math.max(1, m.dates.filter((d) => d >= entryDay && d <= exitDay).length),
-      maxHoldSessions: 0,
-      impulseLow: null,
-      impulseHigh: null,
       ...(pos!.reentry && { reentry: pos!.reentry }),
     });
     pos = null;

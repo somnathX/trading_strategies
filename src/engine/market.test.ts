@@ -42,9 +42,8 @@ describe("resample to 30 minutes", () => {
 });
 
 describe("US session", () => {
-  it("uses 09:30–16:00 for SPX: sessions, hourly bars and the opening range all start at 09:30", async () => {
+  it("uses 09:30–16:00 for SPX: sessions and hourly bars start at 09:30", async () => {
     const { buildMarket } = await import("./market");
-    const { openingRange } = await import("./signals");
     const us = { open: 9 * 60 + 30, orbClose: 15 * 60 + 30, close: 16 * 60 };
     const day = dayStart(isoToDay("2026-01-05"));
     const c: Candles = { t: [], o: [], h: [], l: [], c: [], v: [] };
@@ -57,7 +56,6 @@ describe("US session", () => {
     expect(minuteOf(c.t[full[0]])).toBe(9 * 60 + 30);
     expect(full.length).toBe(77);
     expect(minuteOf(resample(c, 60, us.open).t[0])).toBe(9 * 60 + 30);
-    expect(openingRange(m, m.sessions.get(isoToDay("2026-01-05")), 15)).toMatchObject({ high: 6, low: 2 }); // 09:30–09:40 bars
   });
 });
 

@@ -36,20 +36,6 @@ export interface OptionLeg {
   delta: number; // at entry
   rolls: number;
   iv: number; // at entry
-  // Multi-leg positions (option selling strategy). type/strike above describe the sold call.
-  legs?: SpreadLeg[];
-  structure?: import("./types").SellStructure;
-  turnover?: { buy: number; sell: number }; // premium points per unit, all legs, entry and exit
-  margin?: number; // points per unit the broker blocks (approximate)
-}
-
-export interface SpreadLeg {
-  type: "CE" | "PE";
-  strike: number;
-  expiry: string;
-  qty: 1 | -1; // -1 = sold
-  entry: number;
-  exit: number;
 }
 
 const R = 0.065; // risk-free rate (India 91-day T-bill, roughly)

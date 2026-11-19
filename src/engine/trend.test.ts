@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { adx, atr, ema, sma, supertrend } from "./indicators";
 import { buildMarket, dayStart, isoToDay, lowerBound } from "./market";
-import { runBacktest } from "./backtest";
+import { runTrend as runBacktest } from "./trend";
 import { trendSeries } from "./trend";
 import { DEFAULT_CONFIG, type Candles, type StrategyConfig } from "./types";
 

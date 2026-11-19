@@ -17,16 +17,6 @@ export interface V2Settings {
   maxLots: number;
   cutAfterLosses: number;
   cutDrawdownPct: number;
-  // Range sleeve: option selling run next to the trend strategy, to earn in the sideways weeks where it loses.
-  sleeveOn: boolean;
-  sleeveExpiry: "weekly" | "monthly";
-  sleeveWidth: number; // sold strikes, in expected moves
-  sleeveWing: number; // hedges this many moves further out (iron condor)
-  sleeveStopPct: number; // close at the first daily close losing this % of the premium; 0 = hold
-  sleeveVrp: boolean; // only when ATM IV ≥ 20-day realised vol
-  sleeveAdxMax: number; // only when daily ADX ≤ this; 0 = off
-  sleeveSkipTrend: boolean; // no new condor while a trend trade is open
-  sleeveRisk: number; // % of capital at risk per condor (premium × stop %)
 }
 
 /**
@@ -37,26 +27,7 @@ export interface V2Settings {
  */
 export const DEFAULT_V2: V2Settings = {
   adxMin: 20, htfFilter: false, maGapAtr: 0.5, maxReentries: 1, maxLots: 25, cutAfterLosses: 0, cutDrawdownPct: 0,
-  // Sleeve, from ~240 variants on the same data (so expect some selection bias): the stop at 100% of premium mattered most.
-  // Weekly condor 1.5 moves out, hedged 1 move further, IV ≥ realised: ₹3.9 L, −₹1.5 L drawdown, monthly
-  // correlation −0.25 with the trend strategy; together Sharpe 1.41 → 1.51, drawdown −₹5.5 L → −₹4.8 L.
-  sleeveOn: true, sleeveExpiry: "weekly", sleeveWidth: 1.5, sleeveWing: 1, sleeveStopPct: 100, sleeveVrp: true,
-  sleeveAdxMax: 0, sleeveSkipTrend: false, sleeveRisk: 5,
 };
-
-/** The option-selling run for the range sleeve, on the same instrument, dates and capital. */
-function sleeveSpec(spec: RunSpec, v: V2Settings, trend: RunResult | null): RunSpec {
-  return {
-    ...spec,
-    cfg: {
-      ...spec.cfg, strategy: "option_sell", slippagePoints: 0.5, sellStructure: "iron_condor", sellExpiry: v.sleeveExpiry,
-      sellWidth: v.sleeveWidth, sellWing: v.sleeveWing, stopPct: v.sleeveStopPct, targetPct: 0, exitDaysBefore: 0, ivMin: 0, ivMax: 0,
-      vrpMin: v.sleeveVrp ? 0 : null, adxMax: v.sleeveAdxMax,
-    },
-    account: { ...spec.account, vehicle: undefined, sizing: "risk", riskPct: v.sleeveRisk, compound: false, maxLots: v.maxLots, cutAfterLosses: 0, cutDrawdownPct: 0 },
-    skipDuring: v.sleeveSkipTrend && trend ? trend.all.rows.map((r) => [r.entryTime, r.exitTime]) : undefined,
-  };
-}
 
 /** The run spec with V2 applied. */
 export function withV2(spec: RunSpec, v: V2Settings): RunSpec {
@@ -73,16 +44,11 @@ export function V2({ spec, v1, v2, onChange, onUseEverywhere }: {
   spec: RunSpec; v1: RunResult | null; v2: V2Settings; onChange: (v: V2Settings) => void; onUseEverywhere: () => void;
 }) {
   const set = (p: Partial<V2Settings>) => onChange({ ...v2, ...p });
-  const isTrend = spec.cfg.strategy === "ma_supertrend";
   const onFutures = (spec.account.vehicle ?? "futures") === "futures";
   const v2Spec = useMemo(() => withV2(spec, v2), [spec, v2]);
   const futSpec = useMemo(() => (onFutures ? null : { ...v2Spec, account: { ...v2Spec.account, vehicle: "futures" as const } }), [v2Spec, onFutures]);
   const runs = useRuns([v2Spec, futSpec]);
   const [r2, rFut] = runs.results;
-  const sSpec = useMemo(() => (v2.sleeveOn && (!v2.sleeveSkipTrend || r2) ? sleeveSpec(spec, v2, r2) : null), [spec, v2, r2]);
-  const sleeve = useRuns([sSpec]);
-
-  if (!isTrend) return <p className="empty">V2 is for the MA + SuperTrend strategy. Pick it in the sidebar to try it.</p>;
 
   const cols: Col[] = [];
   if (v1) cols.push({ label: "V1 (sidebar)", ev: v1.all, oos: v1.outOfSample });
@@ -144,7 +110,6 @@ export function V2({ spec, v1, v2, onChange, onUseEverywhere }: {
           <Comparison cols={cols} capital={capital} />
           <Years cols={cols} />
           <Breakdown cols={cols.slice(0, 2)} />
-          <Sleeve v2={v2} set={set} trend={r2} sleeve={sleeve.results[0]} error={sleeve.error} capital={capital} />
         </>
       )}
     </div>
@@ -304,113 +269,4 @@ function Breakdown({ cols }: { cols: Col[] }) {
       </div>
     </section>
   );
-}
-
-/** Trend V2 plus the option-selling sleeve, run on one account: does the sleeve earn when the trend strategy doesn't? */
-function Sleeve({ v2, set, trend, sleeve, error, capital }: {
-  v2: V2Settings; set: (p: Partial<V2Settings>) => void; trend: RunResult | null; sleeve: RunResult | null; error: string | null; capital: number;
-}) {
-  const controls = (
-    <div className="v2-grid">
-      <div className="stack">
-        <Segmented label="Expiry" value={v2.sleeveExpiry} onChange={(v) => set({ sleeveExpiry: v })}
-          options={[{ value: "weekly", label: "Weekly" }, { value: "monthly", label: "Monthly" }]} />
-        <div className="row2">
-          <Field label="Sold strikes"><Num value={v2.sleeveWidth} min={0} max={3} step={0.25} suffix="moves" onChange={(v) => set({ sleeveWidth: v })} /></Field>
-          <Field label="Hedge further out"><Num value={v2.sleeveWing} min={0.25} max={3} step={0.25} suffix="moves" onChange={(v) => set({ sleeveWing: v })} /></Field>
-        </div>
-        <div className="row2">
-          <Field label="Stop loss" hint={v2.sleeveStopPct ? "Of the premium, on daily closes" : "Off: held to expiry"}>
-            <Num value={v2.sleeveStopPct} min={0} max={500} step={25} suffix="%" onChange={(v) => set({ sleeveStopPct: v })} />
-          </Field>
-          <Field label="Risk per condor"><Num value={v2.sleeveRisk} min={0.5} max={20} step={0.5} suffix="%" onChange={(v) => set({ sleeveRisk: v })} /></Field>
-        </div>
-      </div>
-      <div className="stack">
-        <Switch label="Only when options are rich" checked={v2.sleeveVrp} onChange={(v) => set({ sleeveVrp: v })}
-          description="At-the-money IV at least the last 20 days' realised volatility." />
-        <Field label="Only in ranges: daily ADX at most" hint={v2.sleeveAdxMax ? undefined : "Off"}>
-          <Num value={v2.sleeveAdxMax} min={0} max={60} step={1} suffix="0 = off" onChange={(v) => set({ sleeveAdxMax: v })} />
-        </Field>
-        <Switch label="Skip while a trend trade is open" checked={v2.sleeveSkipTrend} onChange={(v) => set({ sleeveSkipTrend: v })}
-          description="No new condor while the trend strategy holds a position." />
-      </div>
-    </div>
-  );
-  const head = (
-    <div className="card-head">
-      <h2>Range sleeve: an iron condor next to the trend strategy</h2>
-      <Switch label="On" checked={v2.sleeveOn} onChange={(v) => set({ sleeveOn: v })} />
-    </div>
-  );
-  if (!v2.sleeveOn) return <section className="card">{head}<p className="hint">Off. Turn it on to sell a hedged iron condor each week or month on the same capital and see how the two combine.</p></section>;
-  const unavailable = sleeve?.options === "unavailable";
-  const ready = trend && sleeve && !unavailable;
-  let body: React.ReactNode = <p className="empty">{error ? `Couldn't run the sleeve: ${error}` : unavailable ? "No option prices for this instrument (only NIFTY and BANKNIFTY)." : "Running the sleeve…"}</p>;
-  if (ready) {
-    const days = trend.all.equity.map((q) => q.day);
-    const tp = new Map(trend.all.equity.map((q) => [q.day, q.pnl]));
-    const sp = new Map(sleeve.all.equity.map((q) => [q.day, q.pnl]));
-    const series = { trend: days.map((d) => tp.get(d) ?? 0), sleeve: days.map((d) => sp.get(d) ?? 0) };
-    const both = series.trend.map((x, i) => x + series.sleeve[i]);
-    const month = (d: number) => new Date(d * 864e5).toISOString().slice(0, 7);
-    const byMonth = (xs: number[]) => { const m = new Map<string, number>(); xs.forEach((x, i) => m.set(month(days[i]), (m.get(month(days[i])) ?? 0) + x)); return m; };
-    const mt = byMonth(series.trend), ms = byMonth(series.sleeve), mb = byMonth(both);
-    const keys = [...mt.keys()];
-    const rho = correlation(keys.map((k) => mt.get(k)!), keys.map((k) => ms.get(k)!));
-    const losingTrendMonths = keys.filter((k) => mt.get(k)! < 0);
-    const sleeveInThem = sum(losingTrendMonths.map((k) => ms.get(k)!));
-    const cols = [["Trend V2", series.trend, mt], ["Sleeve", series.sleeve, ms], ["Together", both, mb]] as const;
-    const stat = cols.map(([, xs, mm]) => ({ ...pathStats(xs, capital), worstMonth: Math.min(...mm.values()), upMonths: [...mm.values()].filter((x) => x > 0).length / mm.size }));
-    const rows: [string, (i: number) => string, (i: number) => number][] = [
-      ["Net P&L", (i) => inr(stat[i].net), (i) => stat[i].net],
-      ["Max drawdown", (i) => inr(stat[i].dd), (i) => stat[i].dd],
-      ["Sharpe", (i) => num(stat[i].sharpe), (i) => stat[i].sharpe],
-      ["Worst month", (i) => inr(stat[i].worstMonth), (i) => stat[i].worstMonth],
-      ["Profitable months", (i) => pct(stat[i].upMonths * 100, 0), (i) => stat[i].upMonths],
-    ];
-    const years = [...new Set(keys.map((k) => k.slice(0, 4)))];
-    const yearSum = (mm: Map<string, number>, y: string) => sum([...mm].filter(([k]) => k.startsWith(y)).map(([, v]) => v));
-    body = (
-      <>
-        <p className="hint">
-          {sleeve.all.summary.trades} condors. Monthly correlation with the trend strategy: <b>{num(rho)}</b> (below 0 means they tend to make money at different times).
-          {" "}In the {losingTrendMonths.length} months the trend strategy lost, the sleeve made <b className={tone(sleeveInThem)}>{inr(sleeveInThem)}</b>.
-          {" "}Option prices are daily closes, so stops are checked once a day: a fast intraday move can lose more than the stop.
-        </p>
-        <div className="table-wrap">
-          <table className="table">
-            <thead><tr><th scope="col">On one {inr(capital)} account</th>{cols.map(([l]) => <th key={l} scope="col" className="num">{l}</th>)}</tr></thead>
-            <tbody>
-              {rows.map(([label, fmt, val]) => (
-                <tr key={label}><th scope="row">{label}</th>{cols.map((_, i) => (
-                  <td key={i} className={`num ${i === 2 ? (val(2) > val(0) ? "pos" : val(2) < val(0) ? "neg" : "") : ""}`}>{fmt(i)}</td>
-                ))}</tr>
-              ))}
-              {years.map((y) => (
-                <tr key={y}><th scope="row">{y}</th>{cols.map(([, , mm], i) => <td key={i} className={`num ${tone(yearSum(mm, y))}`}>{inr(yearSum(mm, y))}</td>)}</tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </>
-    );
-  }
-  return <section className="card">{head}{controls}{body}</section>;
-}
-
-function pathStats(pnl: number[], capital: number) {
-  let eq = capital, peak = capital, dd = 0;
-  for (const x of pnl) { eq += x; peak = Math.max(peak, eq); dd = Math.min(dd, eq - peak); }
-  const r = pnl.map((x) => x / capital);
-  const mean = sum(r) / Math.max(1, r.length);
-  const sd = Math.sqrt(sum(r.map((x) => (x - mean) ** 2)) / Math.max(1, r.length - 1));
-  return { net: sum(pnl), dd, sharpe: sd > 0 ? (mean / sd) * Math.sqrt(252) : 0 };
-}
-
-function correlation(a: number[], b: number[]): number {
-  const ma = sum(a) / a.length, mb = sum(b) / b.length;
-  const cov = sum(a.map((x, i) => (x - ma) * (b[i] - mb)));
-  const den = Math.sqrt(sum(a.map((x) => (x - ma) ** 2)) * sum(b.map((y) => (y - mb) ** 2)));
-  return den > 0 ? cov / den : 0;
 }

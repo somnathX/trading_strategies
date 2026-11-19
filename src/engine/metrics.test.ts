@@ -6,9 +6,8 @@ import type { Trade } from "./types";
 const at = (iso: string) => dayStart(isoToDay(iso)) + 10 * 3600;
 const trade = (o: Partial<Trade>): Trade => ({
   sessionDate: "2026-01-05", side: "long", entryTime: at("2026-01-05"), exitTime: at("2026-01-05"),
-  entryPrice: 25000, exitPrice: 25100, pnlPoints: 100, outcome: "tp1+eod", orbHigh: 0, orbLow: 0,
-  entryStyle: "breakout", stopPrice: 24950, tp: [null, null, null], holdDays: 1, maxHoldSessions: 1,
-  impulseLow: null, impulseHigh: null, ...o,
+  entryPrice: 25000, exitPrice: 25100, pnlPoints: 100, outcome: "tp1+eod", // two exit orders
+  entryStyle: "ma_cross", stopPrice: 24950, holdDays: 1, ...o,
 });
 
 describe("costs and sizing", () => {

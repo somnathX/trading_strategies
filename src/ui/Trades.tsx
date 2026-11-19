@@ -22,24 +22,21 @@ import { load, save } from "./storage";
 type Col = { key: string; label: string; get: (r: TradeRow) => number | string; render?: (r: TradeRow) => ReactNode; num?: boolean };
 
 /** What was actually bought or sold: futures, or the option strike, type and expiry. */
-const STRUCTURE = { double_calendar: "Calendar", strangle: "Strangle", iron_condor: "Condor" } as const;
 const traded = (r: TradeRow) => {
   const o = r.option;
   if (!o) return "Futures";
-  if (o.legs) return `${STRUCTURE[o.structure!]} ${o.legs[0].strike} / ${o.legs[1].strike}`; // sold call / sold put
   return `${o.sell ? "Sold " : ""}${o.strike} ${o.type}`;
 };
 
 /** Why the trade was opened: a cross, a re-entry, a breakout… */
-const entryWhy = (r: TradeRow): string => r.reentry ?? (r.entryStyle === "ma_cross" ? "cross" : r.entryStyle);
+const entryWhy = (r: TradeRow): string => r.reentry ?? "cross";
 const ENTRY_LABELS: Record<string, string> = {
   cross: "MA cross", late: "MA cross (after V2 filters)", st_back: "ST turned back", next_day: "Next-day re-entry",
-  breakout: "Range breakout", fib_pullback: "Pullback", option_sell: "Weekly entry",
 };
 
 /**
  * When a trade actually filled. Trades store the open time of the candle they happened on; MA + SuperTrend trades fill
- * at that candle's close, `bar` seconds later. (Range-breakout stops fill inside the candle, so those keep the open time.)
+ * at that candle's close, `bar` seconds later.
  */
 const filled = (r: TradeRow, t: number, bar: number) => (r.entryStyle === "ma_cross" ? t + bar : t);
 /** When a trade closed: gap and past-SuperTrend exits fill inside the candle (a gap exit at its open), not at its close. */
@@ -57,11 +54,10 @@ const Two = ({ top, sub }: { top: ReactNode; sub?: ReactNode }) => (
 );
 
 /** Why it closed, in a few words. Ladder exits ("tp1+stop") name the last step and list the earlier ones. */
-const closedBy = (r: TradeRow, cfg: StrategyConfig) => {
+const closedBy = (r: TradeRow) => {
   const steps = r.outcome.split("+");
   const last = steps.pop()!;
-  const label = last === "time" ? (cfg.exitDaysBefore ? `${cfg.exitDaysBefore}d before expiry` : "Held to expiry")
-    : last === "st_flip" ? `ST turned ${r.side === "long" ? "red" : "green"}`
+  const label = last === "st_flip" ? `ST turned ${r.side === "long" ? "red" : "green"}`
     : EXIT_LABELS[last] ?? last;
   return { label, after: steps.map((x) => EXIT_LABELS[x] ?? x).join(", ") };
 };
@@ -105,7 +101,7 @@ const sizingWhy = (r: TradeRow): string => {
 };
 
 /** Read left to right: when → what → prices → result → why it closed. */
-const cols = (bar: number, cfg: StrategyConfig, sizedOn?: number, compound = false): Col[] => [
+const cols = (bar: number, _cfg: StrategyConfig, sizedOn?: number, compound = false): Col[] => [
   { key: "in", label: "Date", get: (r) => r.entryTime, render: (r) => {
     const t0 = filled(r, r.entryTime, bar), t1 = exited(r, bar);
     const out = r.holdDays > 1 ? `${date(t1).split(" ")[0].slice(0, 5)} ${time(t1)}` : time(t1);
@@ -141,8 +137,8 @@ const cols = (bar: number, cfg: StrategyConfig, sizedOn?: number, compound = fal
   { key: "pts", label: "Points", get: (r) => r.option?.pnl ?? r.pnlPoints, render: (r) => num(r.option?.pnl ?? r.pnlPoints, 1), num: true },
   { key: "net", label: "Net", get: (r) => r.netInr, num: true,
     render: (r) => <span title={costBreakdown(r)}><Two top={inr(r.netInr)} sub={`${inr(r.chargesInr)} charges · ${inr(r.slippageInr)} slip`} /></span> },
-  { key: "exit", label: "Closed by", get: (r) => closedBy(r, cfg).label, render: (r) => {
-    const c = closedBy(r, cfg);
+  { key: "exit", label: "Closed by", get: (r) => closedBy(r).label, render: (r) => {
+    const c = closedBy(r);
     return <Two top={c.label} sub={c.after && `after ${c.after}`} />;
   } },
 ];
@@ -151,12 +147,6 @@ const cols = (bar: number, cfg: StrategyConfig, sizedOn?: number, compound = fal
 function story(r: TradeRow, cfg: StrategyConfig, bar: number): string {
   const o = r.option;
   if (!o) return underlyingStory(r, cfg, bar);
-  if (o.legs) {
-    const legs = o.legs.map((l) => `${l.qty > 0 ? "bought" : "sold"} ${l.strike} ${l.type === "CE" ? "call" : "put"} (${fmtISO(l.expiry, false)}) ${num(l.entry)} → ${num(l.exit)}`).join("; ");
-    const why = { target: "at the profit target", stop: "at the stop loss", time: cfg.exitDaysBefore ? "before expiry" : "at expiry", open_end: "when the test window ended" }[r.outcome] ?? "";
-    return `Index at ${num(r.entryPrice)}, at-the-money IV ${(o.iv * 100).toFixed(1)}%. ${r.lots} lot${r.lots > 1 ? "s" : ""} per leg: ${legs}. `
-      + `${o.sell ? `Received ${num(o.entry)}, paid ${num(o.exit)} to close` : `Paid ${num(o.entry)}, closed for ${num(o.exit)}`} ${why} with the index at ${num(r.exitPrice)}: ${o.pnl >= 0 ? "+" : ""}${num(o.pnl)} per unit after slippage.`;
-  }
   const leg = `${o.strike} ${o.type === "CE" ? "call" : "put"}`;
   const roll = o.rolls ? ` Rolled to the next month ${o.rolls} time${o.rolls > 1 ? "s" : ""}, ending in the ${fmtISO(o.expiry)} expiry.` : "";
   return `${underlyingStory(r, cfg, bar).replace(/^(Bought|Sold short) [^ ]+ lots? \(\d+\) at/, "Index at")} Traded as the ${leg} (${fmtISO(o.expiry, false)} expiry, `
@@ -166,28 +156,22 @@ function story(r: TradeRow, cfg: StrategyConfig, bar: number): string {
 function underlyingStory(r: TradeRow, cfg: StrategyConfig, bar: number): string {
   const dir = r.side === "long" ? "Bought" : "Sold short";
   const size = `${r.lots} lot${r.lots > 1 ? "s" : ""} (${r.qty})`;
-  if (r.entryStyle === "ma_cross") {
-    const ma = cfg.maType.toUpperCase();
-    const cross = r.reentry === "st_back"
-      ? `SuperTrend turned ${r.side === "long" ? "green" : "red"} again after the last trade's flip exit, with the ${cfg.maFast} ${ma} still ${r.side === "long" ? "above" : "below"} the ${cfg.maSlow} ${ma} (line at ${num(r.stopPrice)})`
-      : r.reentry
-      ? `the day's first candle closed with SuperTrend still ${r.side === "long" ? "green" : "red"} after yesterday's day-end close (line at ${num(r.stopPrice)})`
-      : `the ${cfg.maFast} ${ma} crossed ${r.side === "long" ? "above" : "below"} the ${cfg.maSlow} ${ma} with SuperTrend ${r.side === "long" ? "green" : "red"} (line at ${num(r.stopPrice)})`;
-    const out = exited(r, bar);
-    const when = `${time(out)}${r.holdDays > 1 ? ` on ${date(out)}` : ""}`;
-    const exit = {
-      st_flip: `Closed when SuperTrend turned ${r.side === "long" ? "red" : "green"} at ${when}, at ${num(r.exitPrice)}.`,
-      st_past: `Closed at ${when}, at ${num(r.exitPrice)}: price went ${cfg.trendExitPast ?? 0} points past the SuperTrend line, so it didn't wait for the candle to close.`,
-      gap: `Closed at the open (${when}), at ${num(r.exitPrice)}: the market gapped ${cfg.trendGapExit ?? 0}+ points against the trade, so it didn't wait for the first candle to close.`,
-      eod: `Closed at the session end (${when}), at ${num(r.exitPrice)}.`,
-      open_end: `Still open when the test window ended; marked at ${num(r.exitPrice)} (${when}).`,
-    }[r.outcome] ?? `Exited at ${when}, at ${num(r.exitPrice)}.`;
-    return `${dir} ${size} at ${num(r.entryPrice)} (${time(filled(r, r.entryTime, bar))}, the candle's close) when ${cross}. ${exit}${r.holdDays > 1 ? ` Held ${r.holdDays} sessions.` : ""}`;
-  }
-  const edge = r.side === "long" ? `above the opening-range high ${num(r.orbHigh ?? 0)}` : `below the opening-range low ${num(r.orbLow ?? 0)}`;
-  const how = r.entryStyle === "fib_pullback" ? `on a pullback after the break ${edge}` : `on a close ${edge}`;
-  const steps = r.outcome.split("+").map((p) => EXIT_LABELS[p] ?? p).join(", then ");
-  return `${dir} ${size} at ${num(r.entryPrice)} (${time(r.entryTime)}) ${how}, stop ${num(r.stopPrice)}. Exited by ${steps.toLowerCase()} at ${time(r.exitTime)}${r.holdDays > 1 ? ` on ${date(r.exitTime)}` : ""}, average ${num(r.exitPrice)}.`;
+  const ma = cfg.maType.toUpperCase();
+  const cross = r.reentry === "st_back"
+    ? `SuperTrend turned ${r.side === "long" ? "green" : "red"} again after the last trade's flip exit, with the ${cfg.maFast} ${ma} still ${r.side === "long" ? "above" : "below"} the ${cfg.maSlow} ${ma} (line at ${num(r.stopPrice)})`
+    : r.reentry
+    ? `the day's first candle closed with SuperTrend still ${r.side === "long" ? "green" : "red"} after yesterday's day-end close (line at ${num(r.stopPrice)})`
+    : `the ${cfg.maFast} ${ma} crossed ${r.side === "long" ? "above" : "below"} the ${cfg.maSlow} ${ma} with SuperTrend ${r.side === "long" ? "green" : "red"} (line at ${num(r.stopPrice)})`;
+  const out = exited(r, bar);
+  const when = `${time(out)}${r.holdDays > 1 ? ` on ${date(out)}` : ""}`;
+  const exit = {
+    st_flip: `Closed when SuperTrend turned ${r.side === "long" ? "red" : "green"} at ${when}, at ${num(r.exitPrice)}.`,
+    st_past: `Closed at ${when}, at ${num(r.exitPrice)}: price went ${cfg.trendExitPast ?? 0} points past the SuperTrend line, so it didn't wait for the candle to close.`,
+    gap: `Closed at the open (${when}), at ${num(r.exitPrice)}: the market gapped ${cfg.trendGapExit ?? 0}+ points against the trade, so it didn't wait for the first candle to close.`,
+    eod: `Closed at the session end (${when}), at ${num(r.exitPrice)}.`,
+    open_end: `Still open when the test window ended; marked at ${num(r.exitPrice)} (${when}).`,
+  }[r.outcome] ?? `Exited at ${when}, at ${num(r.exitPrice)}.`;
+  return `${dir} ${size} at ${num(r.entryPrice)} (${time(filled(r, r.entryTime, bar))}, the candle's close) when ${cross}. ${exit}${r.holdDays > 1 ? ` Held ${r.holdDays} sessions.` : ""}`;
 }
 
 export function Trades({ rows, market, focusDay, cfg, sizedOn, compound = false }: { rows: TradeRow[]; market: Market | null; focusDay: string | null; cfg: StrategyConfig; sizedOn?: number; compound?: boolean }) {
@@ -430,14 +414,14 @@ function TradeModal({ trade: r, rows, market, trend, cfg, bar, pos, onMove, canP
   // R in the traded instrument: premium points against the premium at the stop for options, index points otherwise.
   const risk = r.option ? Math.abs(r.option.entry - r.option.stop) : Math.abs(r.entryPrice - r.stopPrice);
   const t0 = filled(r, r.entryTime, bar), t1 = exited(r, bar);
-  const c = closedBy(r, cfg);
+  const c = closedBy(r);
   const sign = (x: number, d = 1) => `${x > 0 ? "+" : ""}${num(x, d)}`;
   const stats: [string, ReactNode, ReactNode?, string?][] = [
     ["Entry", num(r.option?.entry ?? r.entryPrice), `${time(t0)} · ${date(t0)}`],
     ["Exit", num(r.option?.exit ?? r.exitPrice), `${time(t1)} · ${date(t1)}`],
     ["Points", sign(pts), r.option ? `index ${sign(r.pnlPoints)}` : `× ${r.qty} qty`, tone(pts)],
-    ...(risk > 0 && !r.option?.legs ? [["R multiple", `${sign(pts / risk, 2)}R`, `risk ${num(risk, 1)} pts`, tone(pts)] as [string, ReactNode, ReactNode, string]] : []),
-    ...(ex && !r.option?.legs ? [
+    ...(risk > 0 ? [["R multiple", `${sign(pts / risk, 2)}R`, `risk ${num(risk, 1)} pts`, tone(pts)] as [string, ReactNode, ReactNode, string]] : []),
+    ...(ex ? [
       [r.option ? "Best index move" : "Best move", sign(ex.best), ex.best > 0 ? `kept ${Math.round((100 * Math.max(0, r.pnlPoints)) / ex.best)}%` : "never in profit", "pos"] as [string, ReactNode, ReactNode, string],
       [r.option ? "Worst index move" : "Worst move", sign(ex.worst), "against you", "neg"] as [string, ReactNode, ReactNode, string],
     ] : []),

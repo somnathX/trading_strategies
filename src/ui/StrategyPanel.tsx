@@ -4,10 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { NativeSelect } from "@/components/ui/input";
 import { DEFAULT_ACCOUNT, DEFAULT_US_ACCOUNT, type AccountConfig } from "../engine/metrics";
-import { DEFAULT_CONFIG, type StrategyConfig, type Triple } from "../engine/types";
+import { DEFAULT_CONFIG, type StrategyConfig } from "../engine/types";
 import { Field, More, Num, Segmented, Switch, TimeOrOff } from "./controls";
 import { cur, group } from "./format";
-import { matchPreset, presetsFor, type Preset } from "./presets";
+import { matchPreset, PRESETS, type Preset } from "./presets";
 import { isUsd, sessionOf, type DataFile } from "./settings";
 import { load, save } from "./storage";
 import type { LotEstimate } from "./analysis";
@@ -31,50 +31,40 @@ interface Props {
   onLoadSaved: (id: string) => void;
 }
 
-const pctLabel = (x: number) => `${(x * 100).toFixed(1).replace(/\.0$/, "")}%`;
-const pctOptions = (xs: number[]) => xs.map((x) => ({ value: x, label: pctLabel(x) }));
-
-/** The strategy as a recipe: one step per decision, plain-language explanation under each. */
-export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, onPreset, onAccount, lots, saved, onLoadSaved }: Props) {
+/** The MA cross + SuperTrend strategy as four steps: entry, exit, size, costs. Rarely-changed settings sit under "More". */
+export function StrategyPanel({ cfg, account, lotSize, file, onCfg, onPreset, onAccount, lots, saved, onLoadSaved }: Props) {
   const set = (patch: Partial<StrategyConfig>) => onCfg({ ...cfg, ...patch });
   const setAcc = (patch: Partial<AccountConfig>) => onAccount({ ...account, ...patch });
   const preset = matchPreset(cfg);
-  const fib = cfg.entryMode === "fib_pullback";
-  const trend = cfg.strategy === "ma_supertrend";
-  const riskInr = (account.capital * account.riskPct) / 100;
   const usd = isUsd(file);
   const hours = sessionOf(file);
-  const selling = cfg.strategy === "option_sell"; // the weekly option-selling strategy (not the "Sell options" vehicle)
-  const opt = !usd && !selling && account.vehicle === "options";
-  const sell = !usd && !selling && account.vehicle === "sell";
-  const otm = account.otmStrikes ?? 0;
+  const open = hhmm(hours.open), close = hhmm(hours.close);
   const step = OPTION_STEP[file.symbol]; // strike interval, for symbols with option data
+  const opt = !usd && account.vehicle === "options";
+  const optPriced = opt && !!step;
   const itm = account.itmStrikes ?? 6;
-  const lotWord = usd ? `${file.contract ?? "contract"}` : `lot of ${lotSize}`;
-  const presets = presetsFor(cfg.strategy);
-  const n0 = trend || selling ? 3 : 6; // steps before the shared sizing / charges steps
+  const riskInr = (account.capital * account.riskPct) / 100;
+  const unit = usd ? "contract" : "lot";
+  const ma = cfg.maType.toUpperCase();
+
+  const holdText = !cfg.trendCloseEod ? "held overnight until SuperTrend flips"
+    : cfg.trendReenter ? `closed at ${close} and re-opened next morning if SuperTrend still agrees` : `closed at ${close} every day`;
+  const early = [cfg.trendExitPast !== null && `${cfg.trendExitPast} pts past the line`, !cfg.trendCloseEod && cfg.trendGapExit && `a ${cfg.trendGapExit} pt gap at the open`].filter(Boolean);
 
   return (
     <div className="flex flex-col">
-      <div className="flex flex-col gap-4 border-b p-4">
-        <Segmented label="Strategy" stacked value={cfg.strategy}
-          onChange={(v) => set({ strategy: v, ...(v === "option_sell" && { slippagePoints: 0.5 }) })} // per leg; the presets assume it
-          options={[
-            { value: "orb", label: "Range breakout", hint: "Opening range breakout, intraday" },
-            { value: "ma_supertrend", label: "MA + SuperTrend", hint: "Moving-average cross, SuperTrend exit" },
-            { value: "option_sell", label: "Option selling", hint: "Weekly calendars, strangles, condors" },
-          ]} />
+      <div className="border-b p-4">
         <label className="flex flex-col gap-1.5">
           <span className="text-[13px] font-medium text-foreground/90">Start from</span>
           <NativeSelect value={preset?.id ?? "custom"} onChange={(e) => {
             const v = e.target.value;
             if (v.startsWith("saved:")) return onLoadSaved(v.slice(6));
-            const p = presets.find((x) => x.id === v);
+            const p = PRESETS.find((x) => x.id === v);
             if (p) onPreset(p);
           }}>
             {!preset && <option value="custom">Custom settings</option>}
             <optgroup label="Presets">
-              {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </optgroup>
             {saved.length > 0 && (
               <optgroup label="Your saved runs">
@@ -86,137 +76,73 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
         </label>
       </div>
 
-      {trend ? <TrendSteps cfg={cfg} set={set} open={hhmm(hours.open)} close={hhmm(hours.close)} />
-        : selling ? <SellSteps cfg={cfg} set={set} symbol={file.symbol} hasData={!usd && !!step} /> : <>
-      <Step n={1} title="Opening range" text={`The high and low of the first ${cfg.orbMinutes} minutes after ${hhmm(hours.open)}. Price leaving this range is the signal.`}>
-        <Segmented label="Range length" hideLabel value={cfg.orbMinutes}
-          options={[15, 30, 45, 60].map((m) => ({ value: m, label: `${m} min` }))} onChange={(v) => set({ orbMinutes: v })} />
-        {interval > cfg.orbMinutes && (
-          <p className={WARN} role="status">On {interval}-minute candles the range is the whole first candle (09:15–{interval === 60 ? "10:15" : `+${interval}m`}), and entries start from the next one.</p>
-        )}
-      </Step>
-
-      <Step n={2} title="Entry" text={fib
-        ? `After the break, wait for price to pull back ${pctLabel(cfg.fibEntryLevel)} of the move, then enter as it turns back.`
-        : "Enter when a candle closes outside the range, in that direction."}>
-        <Segmented label="Entry style" hideLabel value={cfg.entryMode} onChange={(v) => set({ entryMode: v })}
-          options={[{ value: "breakout", label: "Breakout" }, { value: "fib_pullback", label: "Pullback" }]} />
-        {fib && (
-          <Segmented label="Pullback depth" value={cfg.fibEntryLevel} options={pctOptions([0.382, 0.5, 0.618])} onChange={(v) => set({ fibEntryLevel: v })} />
-        )}
-        <Segmented label="Trades per day" value={cfg.maxTradesPerDay}
-          options={[1, 2, 3, 4].map((n) => ({ value: n, label: String(n) }))} onChange={(v) => set({ maxTradesPerDay: v })} />
-        <More label="Entry timing">
-          <Field label="No new entries from" hint={cfg.lastEntryTime ? "Clear it to allow entries until 15:00." : "Off: entries allowed until 15:00."}>
-            <TimeOrOff label="No new entries from" value={cfg.lastEntryTime} min="09:15" max="15:00" onChange={(v) => set({ lastEntryTime: v })} />
+      <Step n={1} title="Entry" text={`Buy when the ${cfg.maFast} ${ma} crosses above the ${cfg.maSlow} ${ma} with SuperTrend green; short when it crosses below with SuperTrend red${cfg.trendReenterOnFlip ? ". Re-enters when SuperTrend turns back" : ""}.`}>
+        <Segmented label="Average" hideLabel value={cfg.maType} onChange={(v) => set({ maType: v })}
+          options={[{ value: "ema", label: "EMA", hint: "Exponential: reacts faster" }, { value: "sma", label: "SMA", hint: "Simple average" }]} />
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Fast"><Num value={cfg.maFast} min={2} step={1} suffix="bars" onChange={(v) => set({ maFast: Math.round(v) })} /></Field>
+          <Field label="Slow"><Num value={cfg.maSlow} min={3} step={1} suffix="bars" onChange={(v) => set({ maSlow: Math.round(v) })} /></Field>
+        </div>
+        {cfg.maFast >= cfg.maSlow && <p className={WARN} role="alert">The fast average should be shorter than the slow one.</p>}
+        <Switch label="Re-enter when SuperTrend turns back" checked={cfg.trendReenterOnFlip} onChange={(v) => set({ trendReenterOnFlip: v })}
+          description={cfg.trendReenterOnFlip
+            ? `After an exit, buy again when SuperTrend turns back, as long as the ${cfg.maFast} ${ma} is still on the same side of the ${cfg.maSlow} ${ma}.`
+            : "Off: after an exit, wait for the next cross."} />
+        <More label={cfg.trendEntryBreak || cfg.trendLastEntry ? "Entry timing (changed)" : "Entry timing"}>
+          <Segmented label="Buy at" value={cfg.trendEntryBreak ? `${cfg.trendBreakRolling ? "r" : "b"}${cfg.trendEntryBreak}` : "close"}
+            onChange={(v) => set(v === "close" ? { trendEntryBreak: 0, trendBreakRolling: false } : { trendEntryBreak: Number(v.slice(1)), trendBreakRolling: v[0] === "r" })}
+            options={[
+              { value: "close", label: "Close", hint: "Enter at the close of the signal candle" },
+              { value: "b1", label: "Break 1", hint: "Enter only if the next candle trades above the signal candle's high (short: below its low)" },
+              { value: "b3", label: "Break 3", hint: "Wait up to 3 candles for price to break the signal candle's high (short: low)" },
+              { value: "r5", label: "Prev high", hint: "Wait up to 5 candles; buy as soon as price trades above the previous candle's high (short: below its low)" },
+            ]} />
+          <p className="-mt-2 text-xs leading-relaxed text-muted-foreground">{!cfg.trendEntryBreak
+            ? "Enters at the close of the candle that gives the signal."
+            : cfg.trendBreakRolling
+            ? `Buys as soon as price trades above the previous candle's high (a short, below its low), for up to ${cfg.trendEntryBreak} candles. Backtest only: the live bot buys at the close.`
+            : `Waits ${cfg.trendEntryBreak} candle${cfg.trendEntryBreak > 1 ? "s" : ""} for price to break the signal candle's high (a short, its low); no trade if it doesn't. Backtest only: the live bot buys at the close.`}</p>
+          <Field label="No new entries after" hint={cfg.trendLastEntry ? `Crosses from ${cfg.trendLastEntry} on are ignored; open trades still exit on SuperTrend.` : "Off: entries on any candle."}>
+            <TimeOrOff label="No new entries after" value={cfg.trendLastEntry} min={open} max={close} onChange={(v) => set({ trendLastEntry: v })} />
           </Field>
-          {fib && (
-            <Field label="Minimum move before a pullback" hint="As a multiple of the opening range.">
-              <Num value={cfg.minImpulseOrRatio} min={0} step={0.05} suffix="× OR" onChange={(v) => set({ minImpulseOrRatio: v })} />
-            </Field>
-          )}
         </More>
       </Step>
 
-      <Step n={3} title="Confirmation" text="Filters that skip weak signals.">
-        <Switch label="Strong candle only" checked={cfg.requireStrongCandle} onChange={(v) => set({ requireStrongCandle: v })}
-          description={cfg.requireStrongCandle ? `Body at least ${pctLabel(cfg.minBodyRatio)} of the candle, wicks under ${pctLabel(cfg.maxWickRatio)}.` : "Any close beyond the level counts."} />
-        <Switch label="Trade with VWAP" checked={cfg.useVwapFilter} onChange={(v) => set({ useVwapFilter: v })}
-          description="Longs only above the day's VWAP, shorts only below." />
-        {cfg.requireStrongCandle && (
-          <More label="Candle thresholds">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Min body"><Num value={cfg.minBodyRatio} min={0} max={1} step={0.05} onChange={(v) => set({ minBodyRatio: v })} /></Field>
-              <Field label="Max wick"><Num value={cfg.maxWickRatio} min={0} max={1} step={0.05} onChange={(v) => set({ maxWickRatio: v })} /></Field>
-            </div>
-          </More>
-        )}
-      </Step>
-
-      <Step n={4} title="Stop loss" text={stopText(cfg)}>
-        <Segmented label="Stop type" hideLabel value={cfg.stopMode} onChange={(v) => set({ stopMode: v })}
-          options={[{ value: "fixed", label: "Fixed" }, { value: "trail", label: "Trailing" }]} />
-        {fib && cfg.stopMode === "fixed" ? (
-          <Segmented label="Depth of the move" value={cfg.fibPullbackStopLevel} options={pctOptions([0.618, 0.786, 0.886, 1])}
-            onChange={(v) => set({ fibPullbackStopLevel: v })} />
-        ) : (
-          <Segmented label={cfg.stopMode === "trail" ? "Trail distance (of the range)" : "Distance back into the range"} value={cfg.stopLevel}
-            options={pctOptions([0.382, 0.5, 0.618, 0.786, 1])} onChange={(v) => set({ stopLevel: v })} />
-        )}
-      </Step>
-
-      <Step n={5} title="Take profit" text={exitText(cfg)}>
-        <Segmented label="Exit style" hideLabel value={cfg.exitMode} onChange={(v) => set({ exitMode: v })}
+      <Step n={2} title="Exit" text={`Out when SuperTrend (${cfg.stPeriod}, × ${cfg.stMultiplier}) flips against the trade, at the candle's close${early.length ? `, or earlier on ${early.join(" or ")}` : ""}. Trades are ${holdText}.`}>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="SuperTrend ATR"><Num value={cfg.stPeriod} min={2} step={1} suffix="bars" onChange={(v) => set({ stPeriod: Math.round(v) })} /></Field>
+          <Field label="Multiplier" info="How many ATRs the SuperTrend line sits from price. Higher = fewer flips, later exits.">
+            <Num value={cfg.stMultiplier} min={0.5} step={0.5} suffix="× ATR" onChange={(v) => set({ stMultiplier: v })} />
+          </Field>
+        </div>
+        <Segmented label="Hold" value={!cfg.trendCloseEod ? "flip" : cfg.trendReenter ? "reenter" : "eod"}
+          onChange={(v) => set({ trendCloseEod: v !== "flip", trendReenter: v === "reenter" })}
           options={[
-            { value: "tp_ladder", label: "Ladder", hint: "Book part at each of three targets" },
-            { value: "fib_tsl", label: "Target + trail", hint: "Book at the first target, then trail" },
-            { value: "eod", label: "No target", hint: "Exit only at the stop or the close" },
+            { value: "flip", label: "Overnight", hint: "Hold until SuperTrend flips, overnight included" },
+            { value: "eod", label: "Day end", hint: "Close at the day's last candle" },
+            { value: "reenter", label: "Re-enter", hint: "Close at day end; re-enter next morning if SuperTrend hasn't flipped" },
           ]} />
-        {cfg.exitMode !== "eod" && (
-          <More label="Targets and sizing">
-            <Triple label="Targets (range extensions)" value={cfg.tpExtensions} step={0.05} onChange={(v) => set({ tpExtensions: v })} />
-            {cfg.exitMode === "tp_ladder" && <Triple label="Share booked at each" value={cfg.tpSizes} step={0.05} onChange={(v) => set({ tpSizes: v })} />}
-            {cfg.exitMode === "fib_tsl" && <Triple label="Trail steps (of the range)" value={cfg.tslRatchetFibs} step={0.05} onChange={(v) => set({ tslRatchetFibs: v })} />}
-            <Checks label="Close everything at" value={cfg.tpFullExit} onChange={(v) => set({ tpFullExit: v })} />
-            <Checks label="Close all if reached before lower targets" value={cfg.tpFirstTouchFullExit} onChange={(v) => set({ tpFirstTouchFullExit: v })} />
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium text-foreground/90">Only take each target after</span>
-              <div className="grid grid-cols-3 gap-2">
-                {cfg.tpAfterTime.map((v, k) => (
-                  <TimeOrOff key={k} label={`Target ${k + 1} not before`} value={v}
-                    onChange={(t) => set({ tpAfterTime: replace(cfg.tpAfterTime, k, t) })} />
-                ))}
-              </div>
-            </div>
-          </More>
-        )}
+        <More label={early.length ? `Early exits (${early.length} on)` : "Early exits"}>
+          {!cfg.trendCloseEod && (
+            <Field label="Exit at 9:15 on a big gap" hint={cfg.trendGapExit
+              ? `If the day opens ${cfg.trendGapExit}+ points against the trade from yesterday's close, exit at the open.`
+              : "Off: after a gap, wait for the first candle to close."} info="0 turns it off. The live bot does this too with GAP_EXIT set.">
+              <Num value={cfg.trendGapExit ?? 0} min={0} step={25} suffix="pts" onChange={(v) => set({ trendGapExit: v > 0 ? Math.round(v) : null })} />
+            </Field>
+          )}
+          <Field label="Exit when this far past SuperTrend" hint={cfg.trendExitPast !== null
+            ? `As soon as price is ${cfg.trendExitPast} points past the line, exit there instead of waiting for the candle to close.`
+            : "Off: wait for the candle to close past SuperTrend."} info="0 turns it off. The live bot does this too with EXIT_PAST set.">
+            <Num value={cfg.trendExitPast ?? 0} min={0} step={5} suffix="pts" onChange={(v) => set({ trendExitPast: v > 0 ? Math.round(v) : null })} />
+          </Field>
+        </More>
       </Step>
 
-      <Step n={6} title="Holding period" text={cfg.maxHoldDays > 1
-        ? `Trades can carry overnight for up to ${cfg.maxHoldDays} sessions.`
-        : "Every trade is closed by 15:00 the same day."}>
-        <Segmented label="Hold for" hideLabel value={[1, 2, 3, 5].includes(cfg.maxHoldDays) ? cfg.maxHoldDays : -1}
-          onChange={(v) => v > 0 && set({ maxHoldDays: v })}
-          options={[{ value: 1, label: "Intraday" }, { value: 2, label: "2 days" }, { value: 3, label: "3 days" }, { value: 5, label: "5 days" }]} />
-        {cfg.maxHoldDays > 1 && (
-          <>
-            <Segmented label="Exit on an opposite range break" value={cfg.swingOppositeOr} onChange={(v) => set({ swingOppositeOr: v })}
-              options={[{ value: "eod", label: "At close" }, { value: "intraday", label: "Immediately" }, { value: "off", label: "Off" }]} />
-            <Switch label="Pause new entries after a multi-day exit" checked={cfg.blockSameDayAfterSwing}
-              onChange={(v) => set({ blockSameDayAfterSwing: v })} description="No fresh trade the day a carried trade closes." />
-          </>
-        )}
-      </Step>
-
-      </>}
-
-      <Step n={n0 + 1} title="Position size" text={selling
-        ? `${account.sizing === "risk"
-          ? `Lots chosen so hitting the stop (or the most the position can lose, with no stop) costs about ${cur()}${group(riskInr)}`
-          : `${account.fixedLots} lot${account.fixedLots > 1 ? "s" : ""} of ${lotSize} on every leg`}, if the capital covers the margin: ${account.marginPct}% of the index per lot for a naked strangle, about 2.5% for hedged structures.`
-        : sell
-        ? `Sells a monthly ${otm ? `${otm}-strike out-of-the-money` : "at-the-money"} put for longs and call for shorts${step && otm ? ` (≈${otm * step} pts on ${file.symbol})` : ""}, bought back on the exit signal and rolled at expiry. You keep the premium if the index doesn't go against you; losses are open-ended. ${account.sizing === "risk"
-          ? `Sized so the option gains about ${cur()}${group(riskInr)} in value if the index hits the stop, capped by ${account.marginPct}% margin on the index per lot.`
-          : `${account.fixedLots} lot${account.fixedLots > 1 ? "s" : ""} of ${lotSize} every trade, if the capital covers ${account.marginPct}% margin per lot.`}`
-        : opt
-        ? `Buys a monthly ${itm}-strike in-the-money call for longs and put for shorts${step ? ` (≈${itm * step} pts on ${file.symbol})` : ""}, rolled at expiry. ${account.sizing === "risk"
-          ? `Sized so the option loses about ${cur()}${group(riskInr)} if the index hits the stop, and never more premium than the capital.`
-          : `${account.fixedLots} lot${account.fixedLots > 1 ? "s" : ""} of ${lotSize} every trade, if the capital covers the premium.`}`
-        : account.sizing === "risk"
-        ? `Risk about ${cur()}${group(riskInr)} per trade (entry to ${trend ? "the SuperTrend line" : "stop"}), at least 1 ${lotWord}, and never more than the capital can margin at ${account.marginPct}% per ${usd ? "contract" : "lot"}.`
-        : `${account.fixedLots} × ${lotWord} on every trade, if the capital can margin them at ${account.marginPct}% each.`}>
-        {!usd && !selling && <Segmented label="Trade with" value={account.vehicle ?? "futures"} onChange={(v) => setAcc({ vehicle: v })}
-          options={[{ value: "futures", label: "Futures" }, { value: "options", label: "Buy options" }, { value: "sell", label: "Sell options" }]} />}
-        {sell && (step
-          ? <div className="grid grid-cols-2 gap-3">
-              <Field label="Out of the money" hint={otm ? `${otm} × ${step} = ${otm * step} pts` : "At the money"}>
-                <Num value={otm} min={0} max={15} step={1} suffix="strikes" onChange={(v) => setAcc({ otmStrikes: Math.round(v) })} />
-              </Field>
-              <Field label="Min days to expiry" info="Uses the nearest monthly expiry with at least this many calendar days left; otherwise the next month.">
-                <Num value={account.minDte ?? 7} min={0} max={25} step={1} suffix="days" onChange={(v) => setAcc({ minDte: Math.round(v) })} />
-              </Field>
-            </div>
-          : <p className={WARN} role="status">Option prices are only available for NIFTY and BANKNIFTY. {file.symbol} runs as futures.</p>)}
+      <Step n={3} title="Position size" text={`${opt ? `Buys a ${itm}-strike in-the-money monthly option (call for longs, put for shorts)` : usd ? "Trades the futures contract" : "Trades futures"}. ${account.sizing === "risk"
+        ? `About ${cur()}${group(riskInr)} at risk per trade (${account.riskPct}% of ${account.compound ? "the growing account" : `${cur()}${group(account.capital)}`})`
+        : `${account.fixedLots} ${unit}${account.fixedLots > 1 ? "s" : ""} every trade`}${account.maxLots ? `, at most ${account.maxLots} ${unit}s` : ""}.`}>
+        {!usd && <Segmented label="Trade with" value={account.vehicle === "options" ? "options" : "futures"} onChange={(v) => setAcc({ vehicle: v })}
+          options={[{ value: "futures", label: "Futures" }, { value: "options", label: "Buy options" }]} />}
         {opt && (step
           ? <div className="grid grid-cols-2 gap-3">
               <Field label="In the money" hint={`${itm} × ${step} = ${itm * step} pts`}>
@@ -230,71 +156,71 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
         <Field label="Capital"><Num value={account.capital} min={1000} step={usd ? 5000 : 50000} suffix={cur()} onChange={(v) => setAcc({ capital: v })} /></Field>
         <Segmented label="Sizing" hideLabel value={account.sizing} onChange={(v) => setAcc({ sizing: v })}
           options={[{ value: "risk", label: "% risk per trade" }, { value: "fixed", label: "Fixed lots" }]} />
-        {account.sizing === "risk"
-          ? <>
-              <Segmented label="Risk per trade" value={account.riskPct} onChange={(v) => setAcc({ riskPct: v })}
-                options={[0.5, 1, 2, 3, 5, 10].map((x) => ({ value: x, label: `${x}%` }))} />
-              <Field label="Or any %" hint={account.compound && account.profitRiskPct
-                ? `${cur()}${group(riskInr)} of the starting ${cur()}${group(account.capital)} per trade, plus ${account.profitRiskPct}% of the profit so far. Still capped by margin.`
-                : account.compound
-                ? `${account.riskPct}% of the account value at each entry (${cur()}${group(riskInr)} to start). Still capped by margin.`
-                : `${cur()}${group(riskInr)} of ${cur()}${group(account.capital)} per trade. Still capped by margin.`}>
-                <Num value={account.riskPct} min={0.1} max={100} step={0.5} suffix="%" onChange={(v) => v > 0 && setAcc({ riskPct: v })} />
-              </Field>
+        {account.sizing === "risk" ? <>
+          <Field label="Risk per trade" hint={`Lots chosen so the ${optPriced ? "option loses" : "trade loses"} about ${cur()}${group(riskInr)} if SuperTrend's line at entry is hit.`}>
+            <Num value={account.riskPct} min={0.1} max={100} step={0.5} suffix="%" onChange={(v) => v > 0 && setAcc({ riskPct: v })} />
+          </Field>
+          <Switch label="Grow capital with profits" checked={!!account.compound} onChange={(v) => setAcc({ compound: v })}
+            description={account.compound
+              ? "Each trade is sized on the capital plus all profit and loss so far: trades grow after wins and shrink after losses."
+              : `Off: every trade is sized on ${cur()}${group(account.capital)}.`} />
+        </> : <Field label={usd ? "Contracts" : "Lots"}><Num value={account.fixedLots} min={1} step={1} onChange={(v) => setAcc({ fixedLots: v })} /></Field>}
+        <Field label={`Max ${unit}s per trade`} hint={account.maxLots ? `Never more than ${account.maxLots}, however big the account grows.` : "Off: only capital limits the size."}
+          info="A practical ceiling. NSE splits orders above its freeze quantity (about 27 Nifty lots), and big sizes fill worse than backtest prices. 0 turns it off.">
+          <Num value={account.maxLots ?? 0} min={0} max={5000} step={10} suffix={`${unit}s`} onChange={(v) => setAcc({ maxLots: Math.max(0, Math.round(v)) })} />
+        </Field>
+        {(account.sizing === "risk" || !optPriced) && (
+          <More label="More sizing options">
+            {account.sizing === "risk" && (
               <Switch label="Skip trades over my risk" checked={!!account.skipOverRisk} onChange={(v) => setAcc({ skipOverRisk: v })}
                 description={account.skipOverRisk
-                  ? `A signal is skipped when even 1 ${usd ? "contract" : "lot"} would lose more than ${account.riskPct}% if the stop is hit (a wide stop).`
-                  : `Off: when 1 ${usd ? "contract" : "lot"} risks more than ${account.riskPct}%, it still trades 1 ${usd ? "contract" : "lot"}.`} />
-              <Switch label="Grow capital with profits" checked={!!account.compound} onChange={(v) => setAcc({ compound: v })}
-                description={!account.compound
-                  ? `Off: every trade is sized on the starting ${cur()}${group(account.capital)}; profits aren't reinvested.`
-                  : account.profitRiskPct
-                  ? `Two pots: the starting ${cur()}${group(account.capital)} always at ${account.riskPct}%, plus the profit made so far at ${account.profitRiskPct}%. The lots are added together, capped by what the account can margin.`
-                  : "Each trade is sized on the starting capital plus all profit and loss so far: trades grow after wins and shrink after losses."} />
-              {account.compound && (
-                <Field label="Risk on profits" hint={account.profitRiskPct ? `Profits sized separately at ${account.profitRiskPct}%.` : "Off: the whole account (capital + profits) at the risk % above."}
-                  info="Size the starting capital and the profits as two separate pots. Example: capital at 10% and profits at 2%. 0 turns it off.">
-                  <Num value={account.profitRiskPct ?? 0} min={0} max={100} step={0.5} suffix="%" onChange={(v) => setAcc({ profitRiskPct: v })} />
-                </Field>
-              )}
-            </>
-          : <Field label={usd ? "Contracts" : "Lots"}><Num value={account.fixedLots} min={1} step={1} onChange={(v) => setAcc({ fixedLots: v })} /></Field>}
-        <Field label={`Max ${usd ? "contracts" : "lots"} per trade`} hint={account.maxLots ? `Never more than ${account.maxLots} ${usd ? "contracts" : "lots"} in one trade, however big the account grows.` : "Off: no cap (only margin limits the size)."}
-          info="A practical ceiling. NSE splits orders above its freeze quantity (about 27 Nifty lots), and big sizes fill worse than backtest prices. 0 turns it off.">
-          <Num value={account.maxLots ?? 0} min={0} max={5000} step={10} suffix={usd ? "contracts" : "lots"} onChange={(v) => setAcc({ maxLots: Math.max(0, Math.round(v)) })} />
-        </Field>
-        {!(opt && step) && <Field label={usd ? "Margin per contract" : "Margin per lot"} info={usd ? "Initial margin per futures contract, as % of its value (index × $ per point). MES and ES are roughly 6–9%. Positions are capped at what the capital can cover." : sell ? "Margin your broker blocks per sold option lot, as % of the index value (index × lot size). A naked Nifty option is roughly 10–13%, like a future. Positions are capped at what the capital can cover." : "Margin your broker blocks per futures lot, as % of the contract value (price × lot size). Nifty is roughly 10–13%. Positions are capped at what the capital can cover."}>
-          <Num value={account.marginPct} min={1} max={100} step={0.5} suffix="%" onChange={(v) => setAcc({ marginPct: v })} />
-        </Field>}
-        {lots && <LotsNote lots={lots} lotSize={lotSize} capital={account.capital} unit={usd ? "contract" : "lot"} premium={opt && !!step} />}
+                  ? `Skips a signal when even 1 ${unit} would lose more than ${account.riskPct}% at the stop.`
+                  : `Off: when 1 ${unit} risks more than ${account.riskPct}%, it still trades 1 ${unit}.`} />
+            )}
+            {account.sizing === "risk" && account.compound && (
+              <Field label="Risk on profits" hint={account.profitRiskPct ? `Starting capital at ${account.riskPct}%, profits sized separately at ${account.profitRiskPct}%.` : "Off: the whole account at the risk % above."}
+                info="Size the starting capital and the profits as two pots, e.g. capital at 10% and profits at 2%. 0 turns it off.">
+                <Num value={account.profitRiskPct ?? 0} min={0} max={100} step={0.5} suffix="%" onChange={(v) => setAcc({ profitRiskPct: v })} />
+              </Field>
+            )}
+            {!optPriced && (
+              <Field label={`Margin per ${unit}`} info={usd ? "Initial margin per futures contract, as % of its value. MES and ES are roughly 6–9%." : "Margin your broker blocks per futures lot, as % of the contract value. Nifty is roughly 10–13%."}>
+                <Num value={account.marginPct} min={1} max={100} step={0.5} suffix="%" onChange={(v) => setAcc({ marginPct: v })} />
+              </Field>
+            )}
+          </More>
+        )}
+        {lots && <LotsNote lots={lots} lotSize={lotSize} capital={account.capital} unit={unit} premium={optPriced} />}
       </Step>
 
-      <Step n={n0 + 2} title="Execution & charges" text={selling
-        ? `Option charges (Zerodha): ₹20 per order on every leg, STT 0.15% of the sell premium, NSE 0.03503%, stamp 0.003% on buys, GST 18%. ${cfg.slippagePoints} pt slippage per leg on the way in and out.`
-        : (opt || sell) && step
-        ? `Option charges (Zerodha): ₹20 per order, STT 0.15% of the sell premium, NSE 0.03503%, stamp 0.003% on buys, GST 18%. ${account.exitSlippagePoints} pt premium slippage on exit.`
+      <Step n={4} title="Costs" text={optPriced
+        ? `Option charges (Zerodha): ₹20 per order, STT 0.15% of the sell premium, exchange, stamp and GST. ${cfg.slippagePoints} pt entry and ${account.exitSlippagePoints} pt exit slippage.`
         : usd
-        ? `${cfg.slippagePoints + account.exitSlippagePoints} pts slippage per round trip, $${account.feePerLot ?? 0} per contract per side in fees.`
-        : `${cfg.slippagePoints + account.exitSlippagePoints} pts slippage per round trip, STT ${account.sttSellPct}% on the sell side, ₹${account.brokeragePerOrder} per order.`}>
-        <More label="Slippage and charges">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Entry slippage"><Num value={cfg.slippagePoints} min={0} step={0.5} suffix="pts" onChange={(v) => set({ slippagePoints: v })} /></Field>
-            <Field label="Exit slippage"><Num value={account.exitSlippagePoints} min={0} step={0.5} suffix="pts" onChange={(v) => setAcc({ exitSlippagePoints: v })} /></Field>
-            {usd ? <Field label="Fees / contract / side" info="Commission plus exchange and regulatory fees for one contract, one side. MES at IBKR is about $0.62; ES about $2.25.">
-              <Num value={account.feePerLot ?? 0} min={0} step={0.1} suffix="$" onChange={(v) => setAcc({ feePerLot: v })} />
-            </Field> : (opt || sell || selling) && step ? null : <>
-            <Field label="Brokerage / order"><Num value={account.brokeragePerOrder} min={0} step={5} suffix="₹" onChange={(v) => setAcc({ brokeragePerOrder: v })} /></Field>
-            <Field label="STT, sell side" info="Securities Transaction Tax. Futures: 0.05% of the sell value since 1 April 2026 (0.02% before).">
-              <Num value={account.sttSellPct} min={0} step={0.005} suffix="%" onChange={(v) => setAcc({ sttSellPct: v })} />
-            </Field>
-            <Field label="Exchange fee"><Num value={account.exchangePct} min={0} step={0.0001} suffix="%" onChange={(v) => setAcc({ exchangePct: v })} /></Field>
-            <Field label="SEBI fee"><Num value={account.sebiPerCrore} min={0} step={1} suffix="₹/Cr" onChange={(v) => setAcc({ sebiPerCrore: v })} /></Field>
-            <Field label="Stamp duty, buy"><Num value={account.stampBuyPct} min={0} step={0.001} suffix="%" onChange={(v) => setAcc({ stampBuyPct: v })} /></Field>
-            <Field label="GST"><Num value={account.gstPct} min={0} step={1} suffix="%" onChange={(v) => setAcc({ gstPct: v })} /></Field>
-            </>}
-          </div>
-          <p className="text-xs leading-relaxed text-muted-foreground">{usd ? "US index-futures defaults (CME micro E-mini). Check them against your broker." : "Index-futures defaults. Check them against a recent contract note."}</p>
-        </More>
+        ? `${cfg.slippagePoints + account.exitSlippagePoints} pts slippage per round trip, $${account.feePerLot ?? 0} per contract per side.`
+        : `${cfg.slippagePoints + account.exitSlippagePoints} pts slippage per round trip, STT ${account.sttSellPct}% on sells, ₹${account.brokeragePerOrder} per order.`}>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Entry slippage"><Num value={cfg.slippagePoints} min={0} step={0.5} suffix="pts" onChange={(v) => set({ slippagePoints: v })} /></Field>
+          <Field label="Exit slippage"><Num value={account.exitSlippagePoints} min={0} step={0.5} suffix="pts" onChange={(v) => setAcc({ exitSlippagePoints: v })} /></Field>
+        </div>
+        {usd ? (
+          <Field label="Fees / contract / side" info="Commission plus exchange and regulatory fees for one contract, one side. MES at IBKR is about $0.62; ES about $2.25.">
+            <Num value={account.feePerLot ?? 0} min={0} step={0.1} suffix="$" onChange={(v) => setAcc({ feePerLot: v })} />
+          </Field>
+        ) : !optPriced && (
+          <More label="Charges">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Brokerage / order"><Num value={account.brokeragePerOrder} min={0} step={5} suffix="₹" onChange={(v) => setAcc({ brokeragePerOrder: v })} /></Field>
+              <Field label="STT, sell side" info="Securities Transaction Tax. Futures: 0.05% of the sell value since 1 April 2026 (0.02% before).">
+                <Num value={account.sttSellPct} min={0} step={0.005} suffix="%" onChange={(v) => setAcc({ sttSellPct: v })} />
+              </Field>
+              <Field label="Exchange fee"><Num value={account.exchangePct} min={0} step={0.0001} suffix="%" onChange={(v) => setAcc({ exchangePct: v })} /></Field>
+              <Field label="SEBI fee"><Num value={account.sebiPerCrore} min={0} step={1} suffix="₹/Cr" onChange={(v) => setAcc({ sebiPerCrore: v })} /></Field>
+              <Field label="Stamp duty, buy"><Num value={account.stampBuyPct} min={0} step={0.001} suffix="%" onChange={(v) => setAcc({ stampBuyPct: v })} /></Field>
+              <Field label="GST"><Num value={account.gstPct} min={0} step={1} suffix="%" onChange={(v) => setAcc({ gstPct: v })} /></Field>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">Index-futures defaults. Check them against a recent contract note.</p>
+          </More>
+        )}
       </Step>
 
       <div className="p-4">
@@ -303,137 +229,6 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
         </Button>
       </div>
     </div>
-  );
-}
-
-const STRUCTURES = {
-  double_calendar: "Sell this week's call and put, buy the same strikes in next week's expiry. Pays a debit; earns as this week's options decay faster than next week's, and gains if volatility rises. Loses on a big move either way.",
-  strangle: "Sell this week's call and put with no hedge. Collects the most premium; the loss is open-ended if the index runs past a strike.",
-  iron_condor: "Sell this week's call and put, and buy cheaper ones further out in the same week. Collects less, but the loss is capped at the gap between strikes minus the credit.",
-} as const;
-
-/** Steps for the weekly option-selling strategy. */
-function SellSteps({ cfg, set, symbol, hasData }: { cfg: StrategyConfig; set: (p: Partial<StrategyConfig>) => void; symbol: string; hasData: boolean }) {
-  const off = (v: number) => (v > 0 ? v : 0);
-  return (
-    <>
-      {!hasData && <p className={WARN} role="status">Weekly option prices are only available for NIFTY and BANKNIFTY. Pick one of them to run this strategy; {symbol} has no trades.</p>}
-      <Step n={1} title="What to sell" text={`${STRUCTURES[cfg.sellStructure]} Strikes sit ${cfg.sellWidth ? `${cfg.sellWidth} expected weekly move${cfg.sellWidth === 1 ? "" : "s"}` : "at the money, 0 moves"} from the index, where one move = index × at-the-money IV × √(time to expiry).`}>
-        <Segmented label="Structure" hideLabel value={cfg.sellStructure} onChange={(v) => set({ sellStructure: v })}
-          options={[
-            { value: "double_calendar", label: "Calendar", hint: "Double calendar: sell this week, buy next week" },
-            { value: "strangle", label: "Strangle", hint: "Sell a call and a put, unhedged" },
-            { value: "iron_condor", label: "Iron condor", hint: "Strangle with hedges further out" },
-          ]} />
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Strikes away from the index" info="In expected weekly moves. At VIX 13 with 5 days left, one move on Nifty is about 2%, roughly 450 points.">
-            <Num value={cfg.sellWidth} min={0} max={3} step={0.25} suffix="moves" onChange={(v) => set({ sellWidth: Math.max(0, v) })} />
-          </Field>
-          {cfg.sellStructure === "iron_condor" && (
-            <Field label="Hedges further out" info="How far beyond each sold strike the bought hedge sits, in expected moves (at least one strike).">
-              <Num value={cfg.sellWing} min={0} max={3} step={0.25} suffix="moves" onChange={(v) => set({ sellWing: Math.max(0, v) })} />
-            </Field>
-          )}
-        </div>
-      </Step>
-
-      <Step n={2} title="When to enter" text={`At the close of the first trading day after each weekly expiry${cfg.ivMin || cfg.ivMax
-        ? `, only when at-the-money IV (close to India VIX) is ${cfg.ivMin && cfg.ivMax ? `between ${cfg.ivMin}% and ${cfg.ivMax}%` : cfg.ivMin ? `at least ${cfg.ivMin}%` : `at most ${cfg.ivMax}%`}. Other weeks are skipped.`
-        : ", every week."}`}>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="IV at least" hint={cfg.ivMin ? undefined : "Off"}><Num value={cfg.ivMin} min={0} max={60} step={1} suffix="%" onChange={(v) => set({ ivMin: off(v) })} /></Field>
-          <Field label="IV at most" hint={cfg.ivMax ? undefined : "Off"}><Num value={cfg.ivMax} min={0} max={60} step={1} suffix="%" onChange={(v) => set({ ivMax: off(v) })} /></Field>
-        </div>
-      </Step>
-
-      <Step n={3} title="Exit" text={`${cfg.exitDaysBefore ? `Closed at the close ${cfg.exitDaysBefore} trading day${cfg.exitDaysBefore > 1 ? "s" : ""} before expiry` : "Held to the expiry close, settling at intrinsic value"}${cfg.targetPct || cfg.stopPct
-        ? `, or earlier at the first daily close with ${[cfg.targetPct && `a profit of ${cfg.targetPct}%`, cfg.stopPct && `a loss of ${cfg.stopPct}%`].filter(Boolean).join(" or ")} of the premium ${cfg.sellStructure === "double_calendar" ? "paid" : "received"}`
-        : ""}. Prices are daily closes, so stops are checked once a day.`}>
-        <Segmented label="Close" value={cfg.exitDaysBefore} onChange={(v) => set({ exitDaysBefore: v })}
-          options={[0, 1, 2, 3].map((n) => ({ value: n, label: n ? `${n} day${n > 1 ? "s" : ""} before` : "At expiry" }))} />
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Profit target" hint={cfg.targetPct ? undefined : "Off"}><Num value={cfg.targetPct} min={0} max={500} step={5} suffix="%" onChange={(v) => set({ targetPct: off(v) })} /></Field>
-          <Field label="Stop loss" hint={cfg.stopPct ? undefined : "Off"}><Num value={cfg.stopPct} min={0} max={500} step={10} suffix="%" onChange={(v) => set({ stopPct: off(v) })} /></Field>
-        </div>
-      </Step>
-    </>
-  );
-}
-
-/** Steps for the moving-average cross + SuperTrend strategy. */
-function TrendSteps({ cfg, set, open, close }: { cfg: StrategyConfig; set: (p: Partial<StrategyConfig>) => void; open: string; close: string }) {
-  const ma = cfg.maType.toUpperCase();
-  return (
-    <>
-      <Step n={1} title="Entry signal" text={`Buy when the ${cfg.maFast} ${ma} crosses above the ${cfg.maSlow} ${ma} while SuperTrend is green; sell short when it crosses below while SuperTrend is red. The averages are used only to enter.`}>
-        <Segmented label="Average type" hideLabel value={cfg.maType} onChange={(v) => set({ maType: v })}
-          options={[{ value: "ema", label: "EMA", hint: "Exponential: reacts faster" }, { value: "sma", label: "SMA", hint: "Simple average" }]} />
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Fast"><Num value={cfg.maFast} min={2} step={1} suffix="bars" onChange={(v) => set({ maFast: Math.round(v) })} /></Field>
-          <Field label="Slow"><Num value={cfg.maSlow} min={3} step={1} suffix="bars" onChange={(v) => set({ maSlow: Math.round(v) })} /></Field>
-        </div>
-        {cfg.maFast >= cfg.maSlow && <p className={WARN} role="alert">The fast average should be shorter than the slow one.</p>}
-        <Segmented label="Buy at" value={cfg.trendEntryBreak ? `${cfg.trendBreakRolling ? "r" : "b"}${cfg.trendEntryBreak}` : "close"}
-          onChange={(v) => set(v === "close" ? { trendEntryBreak: 0, trendBreakRolling: false } : { trendEntryBreak: Number(v.slice(1)), trendBreakRolling: v[0] === "r" })}
-          options={[
-            { value: "close", label: "Close", hint: "Enter at the close of the signal candle" },
-            { value: "b1", label: "Break 1", hint: "Enter only if the next candle trades above the signal candle's high (short: below its low)" },
-            { value: "b3", label: "Break 3", hint: "Wait up to 3 candles for price to break the signal candle's high (short: low)" },
-            { value: "r5", label: "Prev high", hint: "Wait up to 5 candles; buy as soon as price trades above the previous candle's high (short: below its low)" },
-          ]} />
-        <p className="-mt-2 text-xs leading-relaxed text-muted-foreground">{!cfg.trendEntryBreak
-          ? "Enters at the close of the candle that gives the signal."
-          : cfg.trendBreakRolling
-          ? `After the signal, buys as soon as price trades above the previous candle's high (a short, below its low). The level moves to each new candle, so it usually fills sooner than waiting for the signal candle's high. Waits up to ${cfg.trendEntryBreak} candles; no trade if SuperTrend turns first. Backtest only: the live bot still buys at the close.`
-          : `A buy order waits just above the signal candle's high (a short, just below its low) for ${cfg.trendEntryBreak} candle${cfg.trendEntryBreak > 1 ? "s" : ""}. It fills at that level, or at the open if price gaps past it. If price never breaks it, or SuperTrend turns first, there's no trade. Applies to every entry, re-entries included. Backtest only: the live bot still buys at the close.`}</p>
-        <Switch label="Re-enter when SuperTrend turns back" checked={cfg.trendReenterOnFlip} onChange={(v) => set({ trendReenterOnFlip: v })}
-          description={cfg.trendReenterOnFlip
-            ? `After SuperTrend flips a trade out, buy again when it turns back to the trade's colour, as long as the ${cfg.maFast} ${ma} is still on the same side of the ${cfg.maSlow} ${ma}. No new cross needed.`
-            : "Off: after a SuperTrend exit, wait for the next cross."} />
-      </Step>
-
-      <Step n={2} title="Direction and exit" text={`SuperTrend (ATR ${cfg.stPeriod}, × ${cfg.stMultiplier}) sets the direction. A position closes at the end of the candle where SuperTrend flips against it. Its line at entry is the initial stop used for sizing. Computed on every candle ${open}–${close}, like a chart.`}>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="ATR period"><Num value={cfg.stPeriod} min={2} step={1} suffix="bars" onChange={(v) => set({ stPeriod: Math.round(v) })} /></Field>
-          <Field label="Multiplier" info="How many ATRs the SuperTrend line sits from price. Higher = fewer flips, later exits.">
-            <Num value={cfg.stMultiplier} min={0.5} step={0.5} suffix="× ATR" onChange={(v) => set({ stMultiplier: v })} />
-          </Field>
-        </div>
-        <Segmented label="Exit early" value={cfg.trendExitPast ?? "off"} onChange={(v) => set({ trendExitPast: v === "off" ? null : v })}
-          options={[
-            { value: "off", label: "Off", hint: "Wait for the candle to close past SuperTrend" },
-            ...[10, 25, 50].map((x) => ({ value: x, label: `${x} pts`, hint: `Exit as soon as price is ${x} points past the SuperTrend line` })),
-          ]} />
-        {cfg.trendExitPast !== null && <p className="-mt-2 text-xs leading-relaxed text-muted-foreground">As soon as price trades {cfg.trendExitPast} points past the SuperTrend line, exit there (at the open if it gaps past). Backtest only: the live bot still exits at the close.</p>}
-      </Step>
-
-      <Step n={3} title="Holding" text={!cfg.trendCloseEod
-        ? "Trades carry overnight until SuperTrend flips. Overnight gaps hit at the next candle's close."
-        : cfg.trendReenter
-        ? `Every trade is closed at the day's last candle (${close}). If SuperTrend is still the same colour when the next day's first candle closes, the trade is opened again there (with options, at a fresh strike from that price), with no new cross needed. No overnight risk, but every re-entry pays charges and slippage again.`
-        : `Every trade is closed at the close of the day's last candle (${close}), even if SuperTrend hasn't flipped.`}>
-        <Segmented label="Hold" hideLabel value={!cfg.trendCloseEod ? "flip" : cfg.trendReenter ? "reenter" : "eod"}
-          onChange={(v) => set({ trendCloseEod: v !== "flip", trendReenter: v === "reenter" })}
-          options={[
-            { value: "flip", label: "Until flip", hint: "Hold until SuperTrend flips, overnight included" },
-            { value: "eod", label: "Day end", hint: "Close at the day's last candle" },
-            { value: "reenter", label: "Re-enter", hint: "Close at day end; re-enter next morning if SuperTrend hasn't flipped" },
-          ]} />
-        {!cfg.trendCloseEod && (
-          <Field label="Exit at 9:15 on a big gap" hint={cfg.trendGapExit
-            ? `If the market opens ${cfg.trendGapExit} points or more against the trade (from yesterday's close), exit at the open instead of waiting for the first candle to close.`
-            : "Off: after a gap, wait for the first candle to close, as usual."}
-            info="Measured from the previous day's close to today's open, against the trade. Backtest only: the live bot still exits at candle closes. 0 turns it off.">
-            <Num value={cfg.trendGapExit ?? 0} min={0} step={25} suffix="pts" onChange={(v) => set({ trendGapExit: v > 0 ? Math.round(v) : null })} />
-          </Field>
-        )}
-        <Field label="No new entries after" hint={cfg.trendLastEntry
-          ? `Crosses on candles starting at ${cfg.trendLastEntry} or later are ignored. Open trades still exit on SuperTrend.`
-          : "Off: entries allowed on any candle."}>
-          <TimeOrOff label="No new entries after" value={cfg.trendLastEntry} min={open} max={close} onChange={(v) => set({ trendLastEntry: v })} />
-        </Field>
-      </Step>
-    </>
   );
 }
 
@@ -446,7 +241,7 @@ function LotsNote({ lots, lotSize, capital, unit, premium }: { lots: LotEstimate
       <p><b>≈ {s(lots.median)} per trade</b>{lots.max > lots.min ? ` (${lots.min}–${lots.max} in this run)` : " in this run"}.</p>
       <p className="text-xs leading-relaxed text-muted-foreground">
         The stop is usually {Math.round(lots.stopPts)} {premium ? "premium points" : "points"} away, so each {unit} risks about {cur()}{group(perLot)}
-        {" "}(≈{((perLot / capital) * 100).toFixed(1)}% of capital). Every extra {unit} needs that much more risk %.
+        {" "}(≈{((perLot / capital) * 100).toFixed(1)}% of capital).
         {lots.maxNow !== null && ` Capital can carry up to ${s(lots.maxNow)} at today's price.`}
         {lots.capped > 0 && ` ${lots.capped} trade${lots.capped > 1 ? "s were" : " was"} capped by capital.`}
       </p>
@@ -454,31 +249,9 @@ function LotsNote({ lots, lotSize, capital, unit, premium }: { lots: LotEstimate
   );
 }
 
-function stopText(cfg: StrategyConfig): string {
-  if (cfg.entryMode === "fib_pullback" && cfg.stopMode === "fixed") {
-    return `Exit if price retraces ${pctLabel(cfg.fibPullbackStopLevel)} of the move (or beyond the pullback low/high).`;
-  }
-  return cfg.stopMode === "trail"
-    ? `Follow price, staying ${pctLabel(cfg.stopLevel)} of the range behind the best price so far.`
-    : `Exit if price comes back ${pctLabel(cfg.stopLevel)} into the opening range.`;
-}
-
-function exitText(cfg: StrategyConfig): string {
-  if (cfg.exitMode === "eod") return "No profit target: the trade ends at the stop or at the session close.";
-  if (cfg.exitMode === "fib_tsl") return "Book part at the first target, then tighten the stop in fib steps.";
-  const [a, b, c] = cfg.tpSizes.map((x) => Math.round(x * 100));
-  return `Book ${a}% / ${b}% / ${c}% at three targets. After the first, the stop moves to entry.`;
-}
-
-function replace<T>(arr: Triple<T>, k: number, v: T): Triple<T> {
-  const out = [...arr] as Triple<T>;
-  out[k] = v;
-  return out;
-}
-
 /** Which steps are expanded, by title; remembered across visits. Collapsed steps still say what they're set to. */
 const OPEN_KEY = "orb:open-steps";
-const openSteps = new Set<string>(load<string[]>(OPEN_KEY, ["Entry signal", "Entry", "What to sell", "Position size"]));
+const openSteps = new Set<string>(load<string[]>(OPEN_KEY, ["Entry", "Exit", "Position size"]));
 const WARN = "rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs leading-relaxed text-warn";
 
 function Step({ n, title, text, children }: { n: number; title: string; text: string; children: ReactNode }) {
@@ -499,34 +272,5 @@ function Step({ n, title, text, children }: { n: number; title: string; text: st
       </CollapsibleTrigger>
       <CollapsibleContent className="flex flex-col gap-4 px-4 pt-1 pb-5 pl-12">{children}</CollapsibleContent>
     </Collapsible>
-  );
-}
-
-function Triple({ label, value, step, onChange }: { label: string; value: Triple<number>; step: number; onChange: (v: Triple<number>) => void }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-[13px] font-medium text-foreground/90">{label}</span>
-      <div className="grid grid-cols-3 gap-2">
-        {value.map((v, k) => (
-          <Num key={k} label={`${label}, target ${k + 1}`} value={v} step={step} min={0} onChange={(x) => onChange(replace(value, k, x))} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function Checks({ label, value, onChange }: { label: string; value: Triple<boolean>; onChange: (v: Triple<boolean>) => void }) {
-  return (
-    <fieldset className="flex flex-col gap-1.5">
-      <legend className="mb-1.5 text-[13px] font-medium text-foreground/90">{label}</legend>
-      <div className="grid grid-cols-3 gap-2">
-        {value.map((v, k) => (
-          <label key={k} className="flex cursor-pointer items-center gap-2 text-[13px]">
-            <input type="checkbox" className="size-4 accent-[var(--info)]" checked={v} onChange={(e) => onChange(replace(value, k, e.target.checked))} />
-            <span>Target {k + 1}</span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
   );
 }

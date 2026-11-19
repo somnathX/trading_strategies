@@ -40,7 +40,6 @@ export function Help({ open, onClose }: { open: boolean; onClose: () => void }) 
         <dl className="grid gap-2.5 text-sm">
           {METRICS.map((m) => <div key={m.key} className={pair}><dt className="font-medium">{m.label}</dt><dd className="text-muted-foreground">{m.explain}</dd></div>)}
           <div className={pair}><dt className="font-medium">Out-of-sample</dt><dd className="text-muted-foreground">Recent dates held back from tuning. Results that hold up there are more likely to be real.</dd></div>
-          <div className={pair}><dt className="font-medium">Opening range</dt><dd className="text-muted-foreground">The high and low of the first minutes after the 09:15 open.</dd></div>
         </dl>
       </DialogContent>
     </Dialog>

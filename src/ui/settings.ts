@@ -72,11 +72,23 @@ export function defaultSettings(files: DataFile[]): Settings {
   };
 }
 
+/**
+ * Strategy settings over today's defaults, keeping only settings that still exist. Settings saved while range breakout or
+ * option selling were selected keep their MA + SuperTrend values; the rest is dropped.
+ */
+export function cleanCfg(c: Partial<StrategyConfig> = {}): StrategyConfig {
+  const keys = Object.keys(DEFAULT_CONFIG) as (keyof StrategyConfig)[];
+  return { ...DEFAULT_CONFIG, ...Object.fromEntries(keys.filter((k) => k in c).map((k) => [k, c[k]])), strategy: "ma_supertrend" };
+}
+
+/** "Sell options" was removed with option selling: those accounts trade futures. */
+export const cleanAccount = (a: AccountConfig): AccountConfig => (a.vehicle === "sell" ? { ...a, vehicle: "futures" } : a);
+
 /** Saved settings merged over defaults, so options added later get their defaults. */
 export function loadSettings(files: DataFile[]): Settings {
   const d = defaultSettings(files);
   const { dataTo, ...s } = load<Partial<Settings> & { dataTo?: string }>(KEY, {});
-  const merged: Settings = { ...d, ...s, cfg: { ...d.cfg, ...s.cfg }, account: { ...d.account, ...s.account }, usAccount: { ...d.usAccount, ...s.usAccount }, v2: { ...d.v2, ...s.v2 } };
+  const merged: Settings = { ...d, ...s, cfg: cleanCfg(s.cfg), account: cleanAccount({ ...d.account, ...s.account }), usAccount: { ...d.usAccount, ...s.usAccount }, v2: { ...d.v2, ...s.v2 } };
   // NSE futures transaction charge moved from 0.00173% to 0.00183%: update the old default.
   if (merged.account.exchangePct === 0.00173) merged.account.exchangePct = d.account.exchangePct;
   // Returns are divided by capital: a saved 0 (possible before inputs enforced their minimum) would break every chart.
