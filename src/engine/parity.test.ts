@@ -37,7 +37,15 @@ const ref = JSON.parse(readFileSync(new URL("./__fixtures__/python-reference.jso
 };
 
 // The exact candles the Python reference ran on, frozen (public/data keeps growing with fetch-data).
-const candles = JSON.parse(readFileSync(new URL("./__fixtures__/reference-candles.json", import.meta.url), "utf8")) as Record<string, Candles>;
+// The Python engine skipped weekend candles, special sessions included (Budget day, Sunday 01/02/2026), so they're
+// dropped here; the engine itself now trades them, as the exchange did.
+const weekdaysOnly = (c: Candles): Candles => {
+  const keep = c.t.map((t) => { const dow = new Date((t + 19800) * 1000).getUTCDay(); return dow >= 1 && dow <= 5; });
+  const pick = (xs: number[]) => xs.filter((_, i) => keep[i]);
+  return { t: pick(c.t), o: pick(c.o), h: pick(c.h), l: pick(c.l), c: pick(c.c), v: pick(c.v) };
+};
+const candles = Object.fromEntries(Object.entries(JSON.parse(readFileSync(new URL("./__fixtures__/reference-candles.json", import.meta.url), "utf8")) as Record<string, Candles>)
+  .map(([k, c]) => [k, weekdaysOnly(c)]));
 
 const camel = (k: string) => k.replace(/_(\w)/g, (_, ch: string) => ch.toUpperCase());
 

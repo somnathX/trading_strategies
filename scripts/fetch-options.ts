@@ -40,7 +40,11 @@ function url(day: string): string {
 async function rowsFor(day: string): Promise<Row[] | null> {
   const cached = join(CACHE, `${day}.json`);
   if (existsSync(cached)) return JSON.parse(readFileSync(cached, "utf8"));
-  const res = await fetch(url(day), { headers: { "User-Agent": "Mozilla/5.0" } });
+  let res: Response | null = null;
+  for (let t = 1; !res; t++) { // NSE drops connections now and then: retry a few times before giving up
+    try { res = await fetch(url(day), { headers: { "User-Agent": "Mozilla/5.0" } }); }
+    catch (e) { if (t >= 4) throw new Error(`${day}: ${e instanceof Error ? e.message : e}`); await new Promise((r) => setTimeout(r, 2000 * t)); }
+  }
   let rows: Row[] | null = null;
   if (res.ok) {
     const zip = join(CACHE, `${day}.zip`);

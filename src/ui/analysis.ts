@@ -159,3 +159,58 @@ export function lotEstimate(rows: TradeRow[], lastPrice: number | null, lotSize:
     stopPts: mid(stops), maxNow: !options && lastPrice ? maxLotsByMargin(lastPrice, lotSize, a) : null,
   };
 }
+
+export interface MonteCarlo {
+  runs: number;
+  final: { p5: number; p50: number; p95: number }; // net ₹ at the end
+  maxDd: { p50: number; p95: number }; // worst peak-to-trough, % of the peak account value (negative)
+  pLoss: number; // share of runs that end below the starting capital
+  pHalf: number; // share of runs that lose half the capital at some point
+  bands: { p5: number; p25: number; p50: number; p75: number; p95: number }[]; // cumulative ₹ after each step
+  actual: number[]; // the real order, same steps
+}
+
+/**
+ * Bootstrap: redraw the trades' net ₹ with replacement `runs` times, in random order, to see how much of the
+ * result was the order the trades happened to come in. Seeded, so the numbers don't jump on every render.
+ * ponytail: resamples rupees, so with "grow with profits" sizing later trades keep their compounded size; resample
+ * returns instead if that matters.
+ */
+export function monteCarlo(nets: number[], capital: number, runs = 1000, steps = 80, seed = 1): MonteCarlo | null {
+  const n = nets.length;
+  if (n < 2) return null;
+  let s = seed >>> 0;
+  const rnd = () => { s = (s + 0x6d2b79f5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; // mulberry32
+  const at = Array.from({ length: Math.min(steps, n) }, (_, k) => Math.round(((k + 1) * n) / Math.min(steps, n)) - 1);
+  const paths: number[][] = [];
+  const finals: number[] = [], dds: number[] = [];
+  let loss = 0, half = 0;
+  for (let r = 0; r < runs; r++) {
+    let cum = 0, peak = capital, dd = 0, halved = false, j = 0;
+    const path: number[] = [];
+    for (let i = 0; i < n; i++) {
+      cum += nets[Math.floor(rnd() * n)];
+      const v = capital + cum;
+      peak = Math.max(peak, v);
+      dd = Math.min(dd, peak > 0 ? ((v - peak) / peak) * 100 : -100);
+      if (v <= capital / 2) halved = true;
+      if (i === at[j]) { path.push(cum); j++; }
+    }
+    paths.push(path); finals.push(cum); dds.push(dd);
+    if (cum < 0) loss++;
+    if (halved) half++;
+  }
+  const q = (xs: number[], p: number) => xs[Math.min(xs.length - 1, Math.floor(p * xs.length))];
+  finals.sort((a, b) => a - b); dds.sort((a, b) => a - b);
+  const bands = at.map((_, k) => {
+    const col = paths.map((p) => p[k]).sort((a, b) => a - b);
+    return { p5: q(col, 0.05), p25: q(col, 0.25), p50: q(col, 0.5), p75: q(col, 0.75), p95: q(col, 0.95) };
+  });
+  let cum = 0;
+  const real: number[] = nets.map((x) => (cum += x));
+  return {
+    runs, final: { p5: q(finals, 0.05), p50: q(finals, 0.5), p95: q(finals, 0.95) },
+    maxDd: { p50: q(dds, 0.5), p95: q(dds, 0.05) }, pLoss: loss / runs, pHalf: half / runs,
+    bands, actual: at.map((i) => real[i]),
+  };
+}

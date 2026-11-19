@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isoToDay } from "../engine/market";
 import type { Evaluation, Summary } from "../engine/metrics";
 import type { RunResult } from "../worker";
-import { bucket, histogram, verdict } from "./analysis";
+import { bucket, histogram, monteCarlo, verdict } from "./analysis";
 
 const summary = (o: Partial<Summary>): Summary => ({
   trades: 120, winRate: 50, netInr: 50_000, grossInr: 80_000, costsInr: 30_000, returnPct: 10, cagrPct: 5,
@@ -101,5 +101,23 @@ describe("lot estimate", () => {
     expect([e.median, e.min, e.max, e.capped]).toEqual([1, 1, 2, 1]);
     expect(e.stopPts).toBe(150); // median of 100, 150, 200 (the 0-lot row is ignored)
     expect(e.maxNow).toBe(2); // ₹5L / (25,000 × 65 × 12%) = 2.56
+  });
+});
+
+describe("monteCarlo", () => {
+  it("keeps the same trades, so the median ends near the real total, and is repeatable", () => {
+    const nets = Array.from({ length: 200 }, (_, i) => (i % 2 ? 300 : -200)); // +₹10,000 in total
+    const mc = monteCarlo(nets, 50_000)!;
+    expect(mc.final.p5).toBeLessThan(mc.final.p50);
+    expect(mc.final.p50).toBeLessThan(mc.final.p95);
+    expect(Math.abs(mc.final.p50 - 10_000)).toBeLessThan(3_000);
+    expect(mc.actual[mc.actual.length - 1]).toBe(10_000);
+    expect(mc.maxDd.p95).toBeLessThanOrEqual(mc.maxDd.p50);
+    expect(monteCarlo(nets, 50_000)).toEqual(mc);
+  });
+  it("counts runs that lose money or half the capital", () => {
+    const mc = monteCarlo([-1000, -1000, 500], 2_000)!;
+    expect(mc.pLoss).toBeGreaterThan(0.5);
+    expect(mc.pHalf).toBeGreaterThan(0.5);
   });
 });

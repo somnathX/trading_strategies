@@ -137,8 +137,7 @@ export function liveApi(env: Env): Plugin {
       // ponytail: one order; above the exchange freeze quantity (1,800 Nifty units) use Dhan's /orders/slicing instead.
       const r = await d.call("POST", "/orders", {
         dhanClientId: d.id, correlationId: `live-${Date.now().toString(36)}`, transactionType: o.txn, exchangeSegment: p.exchangeSegment,
-        productType: p.productType, orderType: "LIMIT", validity: "DAY", securityId: String(p.securityId), quantity: o.qty, price: o.price,
-        triggerPrice: "", disclosedQuantity: "", afterMarketOrder: false, amoTime: "", boProfitValue: "", boStopLossValue: "",
+        productType: p.productType, orderType: "LIMIT", validity: "DAY", securityId: String(p.securityId), quantity: o.qty, price: o.price, afterMarketOrder: false,
       });
       return { orderId: r.orderId, status: r.orderStatus, plan: o };
     },

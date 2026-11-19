@@ -259,6 +259,10 @@ export function StrategyPanel({ cfg, account, lotSize, interval, file, onCfg, on
               )}
             </>
           : <Field label={usd ? "Contracts" : "Lots"}><Num value={account.fixedLots} min={1} step={1} onChange={(v) => setAcc({ fixedLots: v })} /></Field>}
+        <Field label={`Max ${usd ? "contracts" : "lots"} per trade`} hint={account.maxLots ? `Never more than ${account.maxLots} ${usd ? "contracts" : "lots"} in one trade, however big the account grows.` : "Off: no cap (only margin limits the size)."}
+          info="A practical ceiling. NSE splits orders above its freeze quantity (about 27 Nifty lots), and big sizes fill worse than backtest prices. 0 turns it off.">
+          <Num value={account.maxLots ?? 0} min={0} max={5000} step={10} suffix={usd ? "contracts" : "lots"} onChange={(v) => setAcc({ maxLots: Math.max(0, Math.round(v)) })} />
+        </Field>
         {!(opt && step) && <Field label={usd ? "Margin per contract" : "Margin per lot"} info={usd ? "Initial margin per futures contract, as % of its value (index × $ per point). MES and ES are roughly 6–9%. Positions are capped at what the capital can cover." : sell ? "Margin your broker blocks per sold option lot, as % of the index value (index × lot size). A naked Nifty option is roughly 10–13%, like a future. Positions are capped at what the capital can cover." : "Margin your broker blocks per futures lot, as % of the contract value (price × lot size). Nifty is roughly 10–13%. Positions are capped at what the capital can cover."}>
           <Num value={account.marginPct} min={1} max={100} step={0.5} suffix="%" onChange={(v) => setAcc({ marginPct: v })} />
         </Field>}
@@ -369,6 +373,19 @@ function TrendSteps({ cfg, set, open, close }: { cfg: StrategyConfig; set: (p: P
           <Field label="Slow"><Num value={cfg.maSlow} min={3} step={1} suffix="bars" onChange={(v) => set({ maSlow: Math.round(v) })} /></Field>
         </div>
         {cfg.maFast >= cfg.maSlow && <p className={WARN} role="alert">The fast average should be shorter than the slow one.</p>}
+        <Segmented label="Buy at" value={cfg.trendEntryBreak ? `${cfg.trendBreakRolling ? "r" : "b"}${cfg.trendEntryBreak}` : "close"}
+          onChange={(v) => set(v === "close" ? { trendEntryBreak: 0, trendBreakRolling: false } : { trendEntryBreak: Number(v.slice(1)), trendBreakRolling: v[0] === "r" })}
+          options={[
+            { value: "close", label: "Close", hint: "Enter at the close of the signal candle" },
+            { value: "b1", label: "Break 1", hint: "Enter only if the next candle trades above the signal candle's high (short: below its low)" },
+            { value: "b3", label: "Break 3", hint: "Wait up to 3 candles for price to break the signal candle's high (short: low)" },
+            { value: "r5", label: "Prev high", hint: "Wait up to 5 candles; buy as soon as price trades above the previous candle's high (short: below its low)" },
+          ]} />
+        <p className="-mt-2 text-xs leading-relaxed text-muted-foreground">{!cfg.trendEntryBreak
+          ? "Enters at the close of the candle that gives the signal."
+          : cfg.trendBreakRolling
+          ? `After the signal, buys as soon as price trades above the previous candle's high (a short, below its low). The level moves to each new candle, so it usually fills sooner than waiting for the signal candle's high. Waits up to ${cfg.trendEntryBreak} candles; no trade if SuperTrend turns first. Backtest only: the live bot still buys at the close.`
+          : `A buy order waits just above the signal candle's high (a short, just below its low) for ${cfg.trendEntryBreak} candle${cfg.trendEntryBreak > 1 ? "s" : ""}. It fills at that level, or at the open if price gaps past it. If price never breaks it, or SuperTrend turns first, there's no trade. Applies to every entry, re-entries included. Backtest only: the live bot still buys at the close.`}</p>
         <Switch label="Re-enter when SuperTrend turns back" checked={cfg.trendReenterOnFlip} onChange={(v) => set({ trendReenterOnFlip: v })}
           description={cfg.trendReenterOnFlip
             ? `After SuperTrend flips a trade out, buy again when it turns back to the trade's colour, as long as the ${cfg.maFast} ${ma} is still on the same side of the ${cfg.maSlow} ${ma}. No new cross needed.`
@@ -382,6 +399,12 @@ function TrendSteps({ cfg, set, open, close }: { cfg: StrategyConfig; set: (p: P
             <Num value={cfg.stMultiplier} min={0.5} step={0.5} suffix="× ATR" onChange={(v) => set({ stMultiplier: v })} />
           </Field>
         </div>
+        <Segmented label="Exit early" value={cfg.trendExitPast ?? "off"} onChange={(v) => set({ trendExitPast: v === "off" ? null : v })}
+          options={[
+            { value: "off", label: "Off", hint: "Wait for the candle to close past SuperTrend" },
+            ...[10, 25, 50].map((x) => ({ value: x, label: `${x} pts`, hint: `Exit as soon as price is ${x} points past the SuperTrend line` })),
+          ]} />
+        {cfg.trendExitPast !== null && <p className="-mt-2 text-xs leading-relaxed text-muted-foreground">As soon as price trades {cfg.trendExitPast} points past the SuperTrend line, exit there (at the open if it gaps past). Backtest only: the live bot still exits at the close.</p>}
       </Step>
 
       <Step n={3} title="Holding" text={!cfg.trendCloseEod
@@ -396,6 +419,14 @@ function TrendSteps({ cfg, set, open, close }: { cfg: StrategyConfig; set: (p: P
             { value: "eod", label: "Day end", hint: "Close at the day's last candle" },
             { value: "reenter", label: "Re-enter", hint: "Close at day end; re-enter next morning if SuperTrend hasn't flipped" },
           ]} />
+        {!cfg.trendCloseEod && (
+          <Field label="Exit at 9:15 on a big gap" hint={cfg.trendGapExit
+            ? `If the market opens ${cfg.trendGapExit} points or more against the trade (from yesterday's close), exit at the open instead of waiting for the first candle to close.`
+            : "Off: after a gap, wait for the first candle to close, as usual."}
+            info="Measured from the previous day's close to today's open, against the trade. Backtest only: the live bot still exits at candle closes. 0 turns it off.">
+            <Num value={cfg.trendGapExit ?? 0} min={0} step={25} suffix="pts" onChange={(v) => set({ trendGapExit: v > 0 ? Math.round(v) : null })} />
+          </Field>
+        )}
         <Field label="No new entries after" hint={cfg.trendLastEntry
           ? `Crosses on candles starting at ${cfg.trendLastEntry} or later are ignored. Open trades still exit on SuperTrend.`
           : "Off: entries allowed on any candle."}>

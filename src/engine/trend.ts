@@ -58,12 +58,16 @@ function entryGate(m: Market, s: TrendSeries, cfg: StrategyConfig): (side: Side,
  *  - Short when the fast MA crosses below the slow MA on a candle where SuperTrend is red.
  *  - Exit when SuperTrend flips against the position (the MAs are only used for entry).
  * Fills are at the signal candle's close; entry slippage is added here, exit slippage in costs.
+ * With trendEntryBreak N, every entry instead waits for a later candle to trade through the signal candle's high
+ * (short: low) within N candles, filling at that level (or the open, if it gaps past). Cancelled if SuperTrend
+ * turns against it first, the day ends with "Day end" holding, or it runs out of candles.
+ * With trendBreakRolling the level is the previous candle's high (short: low) instead, so it moves with every candle.
  * Entries only on days >= fromDay (earlier candles just warm the indicators up).
  */
 export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): Trade[] {
   const series = trendSeries(m, cfg);
   const { bars, st } = series;
-  const { c, t } = m.c;
+  const { o, h, l, c, t } = m.c;
   const trades: Trade[] = [];
   let pos = null as { side: Side; k: number; price: number; stop: number; reentry?: Trade["reentry"] } | null; // `as`: set inside open()/close()
   let carry: Side | null = null; // closed at day end with SuperTrend still on its side: re-enter tomorrow if it still is
@@ -74,10 +78,10 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
   const tooLate = (k: number) => !!cfg.trendLastEntry && m.minute[bars[k]] >= hmToMinutes(cfg.trendLastEntry);
   const aligned = (side: Side, k: number) => (side === "long" ? series.fast[k] > series.slow[k] : series.fast[k] < series.slow[k]);
 
-  const close = (k: number, outcome: string) => {
+  const close = (k: number, outcome: string, at = c[bars[k]]) => {
     const i = bars[k];
     const entryBar = bars[pos!.k];
-    const pnl = pos!.side === "long" ? c[i] - pos!.price : pos!.price - c[i];
+    const pnl = pos!.side === "long" ? at - pos!.price : pos!.price - at;
     const entryDay = m.day[entryBar];
     const exitDay = m.day[i];
     trades.push({
@@ -86,7 +90,7 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
       entryTime: t[entryBar],
       exitTime: t[i],
       entryPrice: pos!.price,
-      exitPrice: c[i],
+      exitPrice: at,
       pnlPoints: pnl,
       outcome,
       orbHigh: null,
@@ -102,16 +106,52 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
     });
     pos = null;
   };
-  const open = (side: Side, k: number, reentry?: Trade["reentry"]) => {
-    const price = side === "long" ? c[bars[k]] + cfg.slippagePoints : c[bars[k]] - cfg.slippagePoints;
-    pos = { side, k, price, stop: st.line[k], ...(reentry && { reentry }) };
+  let pending = null as { side: Side; k: number; level: number; reentry?: Trade["reentry"] } | null; // waiting for the break
+  const fill = (side: Side, k: number, at: number, reentry?: Trade["reentry"], stopK = k) => {
+    pos = { side, k, price: side === "long" ? at + cfg.slippagePoints : at - cfg.slippagePoints, stop: st.line[stopK], ...(reentry && { reentry }) };
     flipped = null;
+  };
+  const open = (side: Side, k: number, reentry?: Trade["reentry"]) => {
+    if (cfg.trendEntryBreak > 0) {
+      pending = { side, k, level: side === "long" ? h[bars[k]] : l[bars[k]], ...(reentry && { reentry }) };
+      flipped = null; // handled like an entry: don't also queue an "ST turned back" re-entry
+    } else fill(side, k, c[bars[k]], reentry);
   };
 
   for (let k = 1; k < bars.length; k++) {
     const i = bars[k];
     const lastOfDay = k === bars.length - 1 || m.day[bars[k + 1]] !== m.day[i];
     const firstOfDay = m.day[bars[k - 1]] !== m.day[i];
+
+    if (pending) { // a signal waiting for price to break its candle; checked first so this candle can also exit it
+      const p: { side: Side; k: number; level: number; reentry?: Trade["reentry"] } = pending;
+      const long = p.side === "long";
+      if (exitSignal(series, k - 1, p.side) || k - p.k > cfg.trendEntryBreak || tooLate(k)
+        || (cfg.trendCloseEod && lastOfDay)) pending = null; // no fill on the candle a Day-end trade would close on
+      else {
+        const level = !cfg.trendBreakRolling ? p.level : long ? h[bars[k - 1]] : l[bars[k - 1]];
+        if (long ? h[i] >= level : l[i] <= level) {
+          pending = null;
+          fill(p.side, k, long ? Math.max(o[i], level) : Math.min(o[i], level), p.reentry, k - 1); // stop: the line known when it fills
+        }
+      }
+    }
+
+    // A big overnight gap against the trade: out at the open instead of waiting for the first candle to close.
+    if (pos && firstOfDay && cfg.trendGapExit !== null
+      && (pos.side === "long" ? c[bars[k - 1]] - o[i] : o[i] - c[bars[k - 1]]) >= cfg.trendGapExit) {
+      if (cfg.trendReenterOnFlip) flipped = pos.side;
+      close(k, "gap", o[i]);
+    }
+    // Too far past the SuperTrend line to wait for the close: out where price reaches that level (or the open, on a gap).
+    const past = cfg.trendExitPast;
+    if (pos && past !== null && pos.k < k) {
+      const long = pos.side === "long", level = long ? st.line[k - 1] - past : st.line[k - 1] + past;
+      if (long ? l[i] <= level : h[i] >= level) {
+        if (cfg.trendReenterOnFlip) flipped = pos.side;
+        close(k, "st_past", long ? Math.min(o[i], level) : Math.max(o[i], level));
+      }
+    }
 
     if (pos) {
       if (exitSignal(series, k, pos.side)) {
@@ -132,7 +172,7 @@ export function runTrend(m: Market, cfg: StrategyConfig, fromDay = -Infinity): T
     if (flipped && !aligned(flipped, k)) flipped = null; // the MAs crossed back: wait for a fresh cross
     if (waiting && !aligned(waiting, k)) waiting = null;
 
-    if (pos || m.day[i] < fromDay || (cfg.trendCloseEod && lastOfDay)) continue;
+    if (pos || pending || m.day[i] < fromDay || (cfg.trendCloseEod && lastOfDay)) continue;
     const side = entrySignal(m, series, cfg, k);
     if (side) {
       waiting = null;

@@ -49,6 +49,7 @@ export const DEFAULT_ACCOUNT: AccountConfig = {
   riskPct: 1,
   marginPct: 12,
   fixedLots: 1,
+  maxLots: 100, // compounding would otherwise size into thousands of lots no market can fill
   exitSlippagePoints: 1,
   brokeragePerOrder: 20,
   brokeragePct: 0.03,
@@ -88,6 +89,11 @@ export interface TradeRow extends Trade {
   slippageInr: number; // exit slippage (entry slippage is already in the entry price)
   chargeParts: { brokerage: number; stt: number; exchange: number; gst: number; stamp: number; sebi: number; other: number };
   netInr: number;
+  capital?: number; // account value when the trade was taken: starting capital + net of trades closed by then
+  capitalAfter?: number; // account value when it closed: starting capital + net of trades closed by its exit, itself included
+  pnlMonth?: number; // net of trades closed in its exit month up to and including it
+  pnlYear?: number; // same, for its exit calendar year
+  pnlTotal?: number; // same, since the start of the test (capitalAfter − starting capital)
   halved?: boolean; // V2: sized at half after a losing streak or in a drawdown
   /** How % risk sizing got its lots: budget = capital × risk %, lots = budget ÷ (stop points × lot size), rounded down. */
   sizeBasis?: { capital: number; riskPct: number; budget: number; perLot: number; stopPts: number; profit?: number; profitRiskPct?: number; extra?: number };
@@ -246,7 +252,18 @@ export function evaluate(trades: Trade[], days: number[], lotSize: number, a: Ac
   const grow = !!a.compound && a.sizing === "risk"; // fixed lots stay fixed
   const sized = a.cutAfterLosses || a.cutDrawdownPct ? sizeWithCuts(trades, lotSize, a, grow)
     : grow ? sizeCompounding(trades, lotSize, a) : trades.map((t) => sizeAndCost(t, lotSize, a));
-  const rows = sized.filter((r) => r.lots > 0);
+  // ponytail: O(n²) rescan of closed trades; fine for a few thousand trades.
+  const rows = sized.filter((r) => r.lots > 0)
+    .map((r, _, all) => {
+      const month = dayToISO(dayOf(r.exitTime)).slice(0, 7), done = all.filter((c) => c === r || c.exitTime <= r.exitTime);
+      const net = (x: TradeRow[]) => sum(x.map((c) => c.netInr));
+      const pnlTotal = net(done);
+      return { ...r,
+        capital: a.capital + net(all.filter((c) => c.exitTime <= r.entryTime)),
+        capitalAfter: a.capital + pnlTotal, pnlTotal,
+        pnlMonth: net(done.filter((c) => dayToISO(dayOf(c.exitTime)).startsWith(month))),
+        pnlYear: net(done.filter((c) => dayToISO(dayOf(c.exitTime)).startsWith(month.slice(0, 4)))) };
+    });
   const skippedForRisk = sized.filter((r) => r.overRisk).length;
   const skippedForMargin = sized.length - rows.length - skippedForRisk;
   const byDay = new Map<number, number>();

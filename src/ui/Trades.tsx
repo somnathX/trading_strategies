@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { isoToDay, lowerBound, type Market } from "../engine/market";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { dayOf, dayToISO, isoToDay, lowerBound, type Market } from "../engine/market";
 import type { TradeRow } from "../engine/metrics";
 import { trendSeries } from "../engine/trend";
 import type { StrategyConfig } from "../engine/types";
 import { finalExit } from "./analysis";
 import { type TrendOverlay } from "./charts";
 import { ProChart } from "./ProChart";
-import { date, fmtISO, inr, num, time, tone } from "./format";
+import { date, fmtISO, group, inr, num, time, tone } from "./format";
 import { Segmented } from "./controls";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -42,11 +42,14 @@ const ENTRY_LABELS: Record<string, string> = {
  * at that candle's close, `bar` seconds later. (Range-breakout stops fill inside the candle, so those keep the open time.)
  */
 const filled = (r: TradeRow, t: number, bar: number) => (r.entryStyle === "ma_cross" ? t + bar : t);
+/** When a trade closed: gap and past-SuperTrend exits fill inside the candle (a gap exit at its open), not at its close. */
+const closeMonth = (r: TradeRow) => dayToISO(dayOf(r.exitTime)).slice(0, 7);
+const exited = (r: TradeRow, bar: number) => (r.outcome === "gap" || r.outcome === "st_past" ? r.exitTime : filled(r, r.exitTime, bar));
 
 /** How long a trade was open: "40m", "2h 15m", or sessions when it ran overnight. */
 const held = (r: TradeRow, bar: number) => {
   if (r.holdDays > 1) return `${r.holdDays}d`;
-  const m = Math.round((filled(r, r.exitTime, bar) - filled(r, r.entryTime, bar)) / 60);
+  const m = Math.round((exited(r, bar) - filled(r, r.entryTime, bar)) / 60);
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`;
 };
 const Two = ({ top, sub }: { top: ReactNode; sub?: ReactNode }) => (
@@ -102,23 +105,35 @@ const sizingWhy = (r: TradeRow): string => {
 };
 
 /** Read left to right: when → what → prices → result → why it closed. */
-const cols = (bar: number, cfg: StrategyConfig): Col[] => [
+const cols = (bar: number, cfg: StrategyConfig, sizedOn?: number, compound = false): Col[] => [
   { key: "in", label: "Date", get: (r) => r.entryTime, render: (r) => {
-    const t0 = filled(r, r.entryTime, bar), t1 = filled(r, r.exitTime, bar);
+    const t0 = filled(r, r.entryTime, bar), t1 = exited(r, bar);
     const out = r.holdDays > 1 ? `${date(t1).split(" ")[0].slice(0, 5)} ${time(t1)}` : time(t1);
     return <Two top={date(t0)} sub={`${time(t0)} → ${out} · ${held(r, bar)}`} />;
   } },
   { key: "traded", label: "Trade", get: (r) => `${r.side} ${traded(r)}`, render: (r) => (
     <span className="flex items-center gap-2.5">
       <SideTag side={r.side} />
-      <Two top={<>{traded(r)}{r.option && <Expiry r={r} />}</>} sub={<>
-        <span title={sizingWhy(r)}>
-          {r.lots}{r.marginCapped ? "*" : ""} lot{r.lots > 1 ? "s" : ""} · {r.qty} qty
-        </span>
-        {r.option?.rolls ? ` · rolled ${r.option.rolls}×` : ""}
-        {r.reentry && ` · ${REENTRY[r.reentry]}`}
-      </>} />
+      <Two top={<>{traded(r)}{r.option && <Expiry r={r} />}</>} sub={[
+        r.option?.rolls ? `rolled ${r.option.rolls}×` : "", r.reentry ? REENTRY[r.reentry] : "",
+      ].filter(Boolean).join(" · ") || undefined} />
     </span>) },
+  // Growing with profits, the balance is what the next trade is sized on, so it leads. Otherwise every trade is sized on the
+  // same capital and only the profit so far moves.
+  compound ? { key: "running", label: "Balance", num: true, get: (r) => r.capitalAfter ?? 0,
+    render: (r) => r.capitalAfter === undefined ? "—" : (
+      <span title="Money in the account after this trade closed (the next trade is sized on it), then the net P&L so far this calendar year and this month">
+        <Two top={inr(r.capitalAfter)} sub={<>Year <span className={tone(r.pnlYear ?? 0)}>{inr(r.pnlYear ?? 0)}</span> · Month <span className={tone(r.pnlMonth ?? 0)}>{inr(r.pnlMonth ?? 0)}</span></>} />
+      </span>) }
+  : { key: "running", label: "P&L so far", num: true, get: (r) => r.pnlYear ?? 0,
+    render: (r) => r.pnlYear === undefined ? "—" : (
+      <span title={`Net P&L of the trades closed so far this calendar year, and this month, this trade included.${sizedOn ? ` Every trade is sized on ${inr(sizedOn)}: grow with profits is off.` : ""}`}>
+        <Two top={<>Year <span className={tone(r.pnlYear)}>{inr(r.pnlYear)}</span></>} sub={<>Month <span className={tone(r.pnlMonth ?? 0)}>{inr(r.pnlMonth ?? 0)}</span></>} />
+      </span>) },
+  { key: "lots", label: "Lots", num: true, get: (r) => r.lots,
+    render: (r) => <span title={sizingWhy(r)}><Two top={`${group(r.lots)}${r.marginCapped ? "*" : ""}`} sub={`${group(r.qty)} qty`} /></span> },
+  { key: "value", label: "Value", num: true, get: (r) => r.qty * (r.option?.entry ?? r.entryPrice),
+    render: (r) => <span title="Quantity × entry price">{inr(r.qty * (r.option?.entry ?? r.entryPrice))}</span> },
   { key: "entry", label: "Entry", num: true, get: (r) => r.option?.entry ?? r.entryPrice,
     render: (r) => <Two top={num(r.option?.entry ?? r.entryPrice)} sub={r.option && `idx ${num(r.entryPrice)}`} /> },
   { key: "exitpx", label: "Exit", num: true, get: (r) => r.option?.exit ?? r.exitPrice,
@@ -158,10 +173,12 @@ function underlyingStory(r: TradeRow, cfg: StrategyConfig, bar: number): string 
       : r.reentry
       ? `the day's first candle closed with SuperTrend still ${r.side === "long" ? "green" : "red"} after yesterday's day-end close (line at ${num(r.stopPrice)})`
       : `the ${cfg.maFast} ${ma} crossed ${r.side === "long" ? "above" : "below"} the ${cfg.maSlow} ${ma} with SuperTrend ${r.side === "long" ? "green" : "red"} (line at ${num(r.stopPrice)})`;
-    const out = filled(r, r.exitTime, bar);
+    const out = exited(r, bar);
     const when = `${time(out)}${r.holdDays > 1 ? ` on ${date(out)}` : ""}`;
     const exit = {
       st_flip: `Closed when SuperTrend turned ${r.side === "long" ? "red" : "green"} at ${when}, at ${num(r.exitPrice)}.`,
+      st_past: `Closed at ${when}, at ${num(r.exitPrice)}: price went ${cfg.trendExitPast ?? 0} points past the SuperTrend line, so it didn't wait for the candle to close.`,
+      gap: `Closed at the open (${when}), at ${num(r.exitPrice)}: the market gapped ${cfg.trendGapExit ?? 0}+ points against the trade, so it didn't wait for the first candle to close.`,
       eod: `Closed at the session end (${when}), at ${num(r.exitPrice)}.`,
       open_end: `Still open when the test window ended; marked at ${num(r.exitPrice)} (${when}).`,
     }[r.outcome] ?? `Exited at ${when}, at ${num(r.exitPrice)}.`;
@@ -173,7 +190,7 @@ function underlyingStory(r: TradeRow, cfg: StrategyConfig, bar: number): string 
   return `${dir} ${size} at ${num(r.entryPrice)} (${time(r.entryTime)}) ${how}, stop ${num(r.stopPrice)}. Exited by ${steps.toLowerCase()} at ${time(r.exitTime)}${r.holdDays > 1 ? ` on ${date(r.exitTime)}` : ""}, average ${num(r.exitPrice)}.`;
 }
 
-export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; market: Market | null; focusDay: string | null; cfg: StrategyConfig }) {
+export function Trades({ rows, market, focusDay, cfg, sizedOn, compound = false }: { rows: TradeRow[]; market: Market | null; focusDay: string | null; cfg: StrategyConfig; sizedOn?: number; compound?: boolean }) {
   // Indicator lines for MA-cross trade charts, computed once per market + settings.
   const trend = useMemo<TrendOverlay | null>(() => {
     if (!market || cfg.strategy !== "ma_supertrend") return null;
@@ -181,11 +198,14 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
     const ma = cfg.maType.toUpperCase();
     return { series, pos: new Map(series.bars.map((b, k) => [b, k])), fastLabel: `${ma} ${cfg.maFast}`, slowLabel: `${ma} ${cfg.maSlow}` };
   }, [market, cfg]);
-  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: "in", dir: -1 }); // newest first
-  const [side, setSide] = useState<"all" | "long" | "short">("all");
-  const [result, setResult] = useState<"all" | "win" | "loss">("all");
-  const [exit, setExit] = useState("all");
-  const [entry, setEntry] = useState("all");
+  // Sort and filters survive reloads and tab switches.
+  const saved = useMemo(() => load<{ sort?: { key: string; dir: 1 | -1 }; side?: "all" | "long" | "short"; result?: "all" | "win" | "loss"; exit?: string; entry?: string }>("orb:trades-view", {}), []);
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>(saved.sort ?? { key: "in", dir: -1 }); // newest first
+  const [side, setSide] = useState(saved.side ?? "all");
+  const [result, setResult] = useState(saved.result ?? "all");
+  const [exit, setExit] = useState(saved.exit ?? "all");
+  const [entry, setEntry] = useState(saved.entry ?? "all");
+  useEffect(() => save("orb:trades-view", { sort, side, result, exit, entry }), [sort, side, result, exit, entry]);
   const [selected, setSelected] = useState<number | null>(null);
   const bar = useMemo(() => { // candle length in seconds: the smallest gap between candles
     let g = Infinity;
@@ -193,12 +213,15 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
     for (let i = 1; i < Math.min(t.length, 500); i++) if (t[i] > t[i - 1]) g = Math.min(g, t[i] - t[i - 1]);
     return Number.isFinite(g) ? g : 0;
   }, [market]);
-  const COLS = useMemo(() => cols(bar, cfg), [bar, cfg]);
+  const COLS = useMemo(() => cols(bar, cfg, sizedOn, compound), [bar, cfg, sizedOn, compound]);
 
   const exits = useMemo(() => [...new Set(rows.map(finalExit))].sort(), [rows]);
   const entries = useMemo(() => [...new Set(rows.map(entryWhy))].sort(), [rows]);
+  // A remembered exit / entry filter this run doesn't have (another strategy, say) falls back to all.
+  useEffect(() => { if (exit !== "all" && !exits.includes(exit)) setExit("all"); }, [exits, exit]);
+  useEffect(() => { if (entry !== "all" && !entries.includes(entry)) setEntry("all"); }, [entries, entry]);
   const view = useMemo(() => {
-    const col = COLS.find((c) => c.key === sort.key)!;
+    const col = COLS.find((c) => c.key === sort.key) ?? COLS[0];
     return rows
       .filter((r) => (side === "all" || r.side === side)
         && (result === "all" || (result === "win" ? r.netInr > 0 : r.netInr <= 0))
@@ -209,6 +232,21 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
         return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
       });
   }, [rows, sort, side, result, exit, entry, COLS]);
+
+  // Sorted by date: a summary row closes each month (capital at its first entry and after its last exit).
+  // Sorted by date: a summary row per month, counting trades by the month they closed (as the Overview's monthly table does).
+  // It goes under the month's last trade in view order; a trade opened in one month and closed in the next belongs to the next.
+  const months = useMemo(() => {
+    if (sort.key !== "in") return null;
+    const m = new Map<string, { n: number; net: number; pts: number; last: TradeRow; at: number }>();
+    view.forEach((r, i) => {
+      const k = closeMonth(r), g = m.get(k);
+      const pts = r.option?.pnl ?? r.pnlPoints;
+      if (!g) m.set(k, { n: 1, net: r.netInr, pts, last: r, at: i });
+      else { g.n++; g.net += r.netInr; g.pts += pts; g.at = i; if (r.exitTime > g.last.exitTime) g.last = r; }
+    });
+    return new Map([...m].map(([k, g]) => [g.at, { month: k, ...g }]));
+  }, [view, sort.key]);
 
   // Arriving from the calendar: select that day's first trade. Otherwise no chart until a row is clicked.
   useEffect(() => {
@@ -280,8 +318,9 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
             </TableRow>
           </TableHeader>
           <tbody ref={tbody}>
-            {view.map((r) => (
-              <TableRow key={r.entryTime} aria-selected={r.entryTime === selected} data-state={r.entryTime === selected ? "selected" : undefined} tabIndex={0}
+            {view.map((r, i) => (
+              <Fragment key={r.entryTime}>
+              <TableRow aria-selected={r.entryTime === selected} data-state={r.entryTime === selected ? "selected" : undefined} tabIndex={0}
                 className="cursor-pointer focus-visible:bg-muted/60 focus-visible:outline-none" onClick={() => setSelected(r.entryTime)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(r.entryTime); } }}>
                 {COLS.map((c) => (
@@ -290,12 +329,38 @@ export function Trades({ rows, market, focusDay, cfg }: { rows: TradeRow[]; mark
                   </TableCell>
                 ))}
               </TableRow>
+              {months?.has(i) && <MonthRow cols={COLS} g={months.get(i)!} compound={compound} />}
+              </Fragment>
             ))}
           </tbody>
         </Table>
         {!view.length && <p className="pb-10 text-center text-muted-foreground">No trades match these filters.</p>}
       </Card>
     </>
+  );
+}
+
+/** A month's totals under its trades: capital in at its first entry, capital out after its last exit. */
+function MonthRow({ cols, g, compound }: { cols: Col[]; g: { month: string; n: number; net: number; pts: number; last: TradeRow }; compound: boolean }) {
+  const cout = g.last.capitalAfter;
+  // % like the Overview: of the starting capital, or (growing with profits) of the balance when the month began.
+  const cin = cout === undefined || g.last.pnlTotal === undefined ? undefined : compound ? cout - g.net : cout - g.last.pnlTotal;
+  const label = new Date(`${g.month}-01T00:00:00Z`).toLocaleString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
+  const cell: Record<string, ReactNode> = {
+    in: <span className="font-semibold">{label}</span>,
+    traded: `${g.n} trade${g.n === 1 ? "" : "s"} closed`,
+    running: g.last.pnlYear === undefined ? "" : compound && cout !== undefined
+      ? <Two top={inr(cout)} sub={<>Year <span className={tone(g.last.pnlYear)}>{inr(g.last.pnlYear)}</span></>} />
+      : <>Year <span className={tone(g.last.pnlYear)}>{inr(g.last.pnlYear)}</span></>,
+    pts: <span className={tone(g.pts)} title="Points captured by the month's trades (option premium points for option trades)">{num(g.pts, 1)}</span>,
+    net: <Two top={inr(g.net)} sub={cin ? `${g.net >= 0 ? "+" : ""}${num((g.net / cin) * 100, 1)}%` : undefined} />,
+  };
+  return (
+    <TableRow className="bg-muted/60 font-medium hover:bg-muted/60" title="Trades closed this month and their net, the same as the Overview's monthly table, then the year-to-date P&L (and, growing with profits, the balance) at the month's end.">
+      {cols.map((c) => (
+        <TableCell key={c.key} className={cn(c.num && "text-right num", c.key === "in" && "pl-5", c.key === "net" && cn("[&_span:first-child]:font-semibold", tone(g.net)))}>{cell[c.key] ?? ""}</TableCell>
+      ))}
+    </TableRow>
   );
 }
 
@@ -364,7 +429,7 @@ function TradeModal({ trade: r, rows, market, trend, cfg, bar, pos, onMove, canP
   const pts = r.option?.pnl ?? r.pnlPoints;
   // R in the traded instrument: premium points against the premium at the stop for options, index points otherwise.
   const risk = r.option ? Math.abs(r.option.entry - r.option.stop) : Math.abs(r.entryPrice - r.stopPrice);
-  const t0 = filled(r, r.entryTime, bar), t1 = filled(r, r.exitTime, bar);
+  const t0 = filled(r, r.entryTime, bar), t1 = exited(r, bar);
   const c = closedBy(r, cfg);
   const sign = (x: number, d = 1) => `${x > 0 ? "+" : ""}${num(x, d)}`;
   const stats: [string, ReactNode, ReactNode?, string?][] = [

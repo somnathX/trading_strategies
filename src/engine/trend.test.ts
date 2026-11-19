@@ -104,6 +104,32 @@ describe("MA cross + SuperTrend", () => {
     }
   });
 
+  it("can exit as soon as price is N points past the SuperTrend line, at that level (or the open on a gap)", () => {
+    const past = runBacktest(m, { ...cfg, trendExitPast: 5 }).filter((t) => t.outcome === "st_past");
+    expect(past.length).toBeGreaterThan(0);
+    for (const t of past) {
+      const x = k(t.exitTime), i = bars[x], level = t.side === "long" ? st.line[x - 1] - 5 : st.line[x - 1] + 5;
+      expect(t.exitPrice).toBe(t.side === "long" ? Math.min(m.c.o[i], level) : Math.max(m.c.o[i], level));
+    }
+  });
+
+  it("can exit at the open when the market gaps against the trade by N points", () => {
+    const c = { ...m.c, o: [...m.c.o], h: [...m.c.h], l: [...m.c.l] }; // the test data has no gaps: add ±30 at each day's open
+    for (let i = 1; i < c.t.length; i++) if (m.day[i] !== m.day[i - 1]) {
+      c.o[i] = c.c[i - 1] + (m.day[i] % 2 ? 30 : -30);
+      c.h[i] = Math.max(c.h[i], c.o[i]); c.l[i] = Math.min(c.l[i], c.o[i]);
+    }
+    const g = buildMarket(c), gb = trendSeries(g, cfg).bars;
+    const gaps = runBacktest(g, { ...cfg, trendGapExit: 25 }).filter((t) => t.outcome === "gap");
+    expect(gaps.length).toBeGreaterThan(0);
+    for (const t of gaps) {
+      const x = gb.indexOf(lowerBound(g.c.t, t.exitTime)), i = gb[x], prev = g.c.c[gb[x - 1]];
+      expect(g.day[i]).not.toBe(g.day[gb[x - 1]]); // the day's first candle
+      expect(t.exitPrice).toBe(g.c.o[i]);
+      expect(t.side === "long" ? prev - g.c.o[i] : g.c.o[i] - prev).toBeGreaterThanOrEqual(25);
+    }
+  });
+
   it("holds one position at a time and carries overnight", () => {
     for (let n = 1; n < trades.length; n++) expect(trades[n].entryTime).toBeGreaterThanOrEqual(trades[n - 1].exitTime);
     expect(trades.some((t) => t.holdDays > 1)).toBe(true);
@@ -166,6 +192,35 @@ describe("MA cross + SuperTrend", () => {
     expect(trades.some((t) => minute(t.entryTime) >= 13 * 60)).toBe(true); // the filter matters on this data
     expect(late.length).toBeGreaterThan(0);
     expect(late.every((t) => minute(t.entryTime) < 13 * 60)).toBe(true);
+  });
+
+  it("with break entry, buys only when a later candle trades through the signal candle's high (sell: low)", () => {
+    const brk = runBacktest(m, trendCfg({ trendEntryBreak: 3 }));
+    expect(brk.length).toBeGreaterThan(0);
+    expect(brk.length).toBeLessThanOrEqual(trades.length); // some signals never break and are dropped
+    for (const t of brk) {
+      const e = k(t.entryTime), i = bars[e];
+      const prior = [1, 2, 3].map((d) => bars[e - d]); // the signal candle is one of the 3 before the fill
+      const lvls = prior.map((j) => (t.side === "long" ? m.c.h[j] : m.c.l[j]));
+      const fillAt = t.entryPrice - (t.side === "long" ? 1 : -1); // minus slippage
+      // Fills at the broken level, or at the open when the candle gaps past it.
+      expect(lvls.some((v) => Math.abs(fillAt - (t.side === "long" ? Math.max(m.c.o[i], v) : Math.min(m.c.o[i], v))) < 1e-9)).toBe(true);
+      expect(t.side === "long" ? m.c.h[i] >= fillAt : m.c.l[i] <= fillAt).toBe(true);
+      expect(t.stopPrice).toBe(st.line[e - 1]);
+    }
+  });
+
+  it("with the rolling break, buys as soon as a candle trades through the previous candle's high (sell: low)", () => {
+    const roll = runBacktest(m, trendCfg({ trendEntryBreak: 5, trendBreakRolling: true }));
+    expect(roll.length).toBeGreaterThan(0);
+    for (const t of roll) {
+      const e = k(t.entryTime), i = bars[e], prev = bars[e - 1];
+      const level = t.side === "long" ? m.c.h[prev] : m.c.l[prev];
+      const fillAt = t.entryPrice - (t.side === "long" ? 1 : -1); // minus slippage
+      expect(fillAt).toBeCloseTo(t.side === "long" ? Math.max(m.c.o[i], level) : Math.min(m.c.o[i], level));
+    }
+    // A moving level fills at least as often as waiting for the fixed signal-candle level over the same 5 candles.
+    expect(roll.length).toBeGreaterThanOrEqual(runBacktest(m, trendCfg({ trendEntryBreak: 5 })).length);
   });
 
   it("does not enter before the start day", () => {

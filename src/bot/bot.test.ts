@@ -115,5 +115,6 @@ describe.skipIf(!candles)("paper trading against a fake Dhan", () => {
     if (!live) return expect(orders).toBe(0); // paper mode never touches the order API
     expect(sent.map((o) => [o.transactionType, o.quantity, o.productType, o.exchangeSegment])).toEqual([["BUY", 65, "MARGIN", "NSE_FNO"], ["SELL", 65, "MARGIN", "NSE_FNO"]]);
     expect(sent.map((o) => o.price)).toEqual([101.55, 149.25]); // ask + 0.5%, bid − 0.5%, on ₹0.05 ticks
+    expect(sent.flatMap((o) => Object.values(o))).not.toContain(""); // Dhan answers DH-905 to "" in typed fields
   }
 });

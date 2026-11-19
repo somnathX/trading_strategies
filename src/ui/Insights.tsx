@@ -1,13 +1,14 @@
 import { useMemo } from "react";
 import { dayOf, dayToISO, isoToDay } from "../engine/market";
 import type { Evaluation, TradeRow } from "../engine/metrics";
-import { bucket, entryHour, entryWeekday, finalExit, histogram, WEEKDAYS, type Bucket } from "./analysis";
+import { bucket, entryHour, entryWeekday, finalExit, histogram, monteCarlo, WEEKDAYS, type Bucket, type MonteCarlo } from "./analysis";
 import { fmtDay, inr, inrShort, pct, tone } from "./format";
 import { EXIT_LABELS, heatStyle } from "./metricsMeta";
 
 /** Where the P&L comes from: calendar, distribution and breakdowns. */
-export function Insights({ evaluation, onPickDay }: { evaluation: Evaluation; onPickDay: (iso: string) => void }) {
+export function Insights({ evaluation, capital, onPickDay }: { evaluation: Evaluation; capital: number; onPickDay: (iso: string) => void }) {
   const rows = evaluation.rows;
+  const mc = useMemo(() => monteCarlo(rows.filter((r) => r.lots > 0).map((r) => r.netInr), capital), [rows, capital]);
   const hours = useMemo(() => bucket(rows, entryHour), [rows]);
   const weekdays = useMemo(() => bucket(rows, entryWeekday, WEEKDAYS), [rows]);
   const sides = useMemo(() => bucket(rows, (r) => (r.side === "long" ? "Long" : "Short"), ["Long", "Short"]), [rows]);
@@ -31,6 +32,16 @@ export function Insights({ evaluation, onPickDay }: { evaluation: Evaluation; on
         </div>
         <Histogram rows={rows} />
       </section>
+
+      {mc && (
+        <section className="card" aria-labelledby="mc-h">
+          <div className="card-head">
+            <h2 id="mc-h">Monte Carlo: {mc.runs.toLocaleString()} reshuffled histories</h2>
+            <span className="hint">The same trades, redrawn at random in a different order each time. It shows how much of the result was luck of the order, and how deep a drawdown you should be ready for.</span>
+          </div>
+          <MonteCarloView mc={mc} capital={capital} />
+        </section>
+      )}
 
       <div className="grid2">
         <Breakdown title="By entry hour" hint="When do entries work?" items={hours} />
@@ -98,6 +109,52 @@ function Histogram({ rows }: { rows: TradeRow[] }) {
         <span>{inrShort(hi)}</span>
       </figcaption>
     </figure>
+  );
+}
+
+function MonteCarloView({ mc, capital }: { mc: MonteCarlo; capital: number }) {
+  const W = 100, H = 40;
+  const lo = Math.min(0, ...mc.bands.map((b) => b.p5), ...mc.actual);
+  const hi = Math.max(0, ...mc.bands.map((b) => b.p95), ...mc.actual);
+  const x = (k: number) => (mc.bands.length > 1 ? (k / (mc.bands.length - 1)) * W : 0);
+  const y = (v: number) => H - ((v - lo) / (hi - lo || 1)) * H;
+  const line = (vs: number[]) => vs.map((v, k) => `${k ? "L" : "M"}${x(k).toFixed(2)},${y(v).toFixed(2)}`).join("");
+  const area = (top: number[], bot: number[]) => `${line(top)}${bot.map((v, k) => `L${x(k).toFixed(2)},${y(v).toFixed(2)}`).reverse().join("")}Z`;
+  const col = (key: "p5" | "p25" | "p50" | "p75" | "p95") => mc.bands.map((b) => b[key]);
+  const stat = (label: string, value: string, cls = "", hint?: string) => (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className={`text-lg font-semibold num ${cls}`}>{value}</span>
+      {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-2 gap-4 @3xl:grid-cols-5">
+        {stat("Typical end result", inrShort(mc.final.p50), tone(mc.final.p50), "median run")}
+        {stat("Bad case (1 in 20)", inrShort(mc.final.p5), tone(mc.final.p5), `good case ${inrShort(mc.final.p95)}`)}
+        {stat("Typical worst drawdown", pct(mc.maxDd.p50), "text-neg", "median run")}
+        {stat("Bad-case drawdown", pct(mc.maxDd.p95), "text-neg", "1 run in 20 is deeper")}
+        {stat("Chance of ending in a loss", pct(mc.pLoss * 100, 1), mc.pLoss > 0.05 ? "text-neg" : "", `losing half of ${inrShort(capital)} at some point: ${pct(mc.pHalf * 100, 1)}`)}
+      </div>
+      <figure className="flex flex-col gap-2">
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-56 w-full overflow-visible" role="img"
+          aria-label={`Cumulative P&L across ${mc.runs} reshuffles: 90% of runs end between ${inr(mc.final.p5)} and ${inr(mc.final.p95)}; the real order ended at ${inr(mc.actual[mc.actual.length - 1])}.`}>
+          <line x1={0} x2={W} y1={y(0)} y2={y(0)} className="stroke-border" strokeDasharray="1 1" vectorEffect="non-scaling-stroke" />
+          <path d={area(col("p95"), col("p5"))} className="fill-info/10" />
+          <path d={area(col("p75"), col("p25"))} className="fill-info/20" />
+          <path d={line(col("p50"))} fill="none" className="stroke-info" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          <path d={line(mc.actual)} fill="none" className="stroke-foreground" strokeWidth={1.5} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
+        </svg>
+        <figcaption className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5"><span className="h-2.5 w-4 rounded-sm bg-info/10" />90% of runs</span>
+          <span className="flex items-center gap-1.5"><span className="h-2.5 w-4 rounded-sm bg-info/25" />middle 50%</span>
+          <span className="flex items-center gap-1.5"><span className="h-0.5 w-4 bg-info" />median</span>
+          <span className="flex items-center gap-1.5"><span className="h-0 w-4 border-t-2 border-dashed border-foreground" />the real order</span>
+          <span className="ml-auto">Cumulative net P&amp;L, trade 1 → {mc.bands.length < 80 ? mc.bands.length : "last"}</span>
+        </figcaption>
+      </figure>
+    </div>
   );
 }
 

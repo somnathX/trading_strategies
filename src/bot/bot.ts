@@ -174,8 +174,7 @@ async function execute(dhan: Dhan, s: Settings, txn: "BUY" | "SELL", q: Quote, q
   if (!orderId) {
     const r = await dhan.call("POST", "/orders", {
       dhanClientId: dhan.id, correlationId: corr, transactionType: txn, exchangeSegment: "NSE_FNO", productType: "MARGIN",
-      orderType: "LIMIT", validity: "DAY", securityId: q.securityId, quantity: qty, price, triggerPrice: "", disclosedQuantity: "",
-      afterMarketOrder: false, amoTime: "", boProfitValue: "", boStopLossValue: "",
+      orderType: "LIMIT", validity: "DAY", securityId: q.securityId, quantity: qty, price, afterMarketOrder: false,
     });
     orderId = r.orderId as string;
   }

@@ -76,7 +76,7 @@ export const presetsFor = (kind: StrategyKind) => PRESETS.filter((p) => (p.cfg.s
 
 /** Settings only the MA cross + SuperTrend / option-selling strategies use; everything else is opening-range only. */
 const OWN_KEYS: Partial<Record<StrategyKind, (keyof StrategyConfig)[]>> = {
-  ma_supertrend: ["maType", "maFast", "maSlow", "stPeriod", "stMultiplier", "trendCloseEod", "trendReenter", "trendReenterOnFlip", "trendLastEntry"],
+  ma_supertrend: ["maType", "maFast", "maSlow", "stPeriod", "stMultiplier", "trendCloseEod", "trendReenter", "trendReenterOnFlip", "trendLastEntry", "trendEntryBreak", "trendBreakRolling", "trendExitPast", "trendGapExit"],
   option_sell: ["sellStructure", "sellWidth", "sellWing", "ivMin", "ivMax", "exitDaysBefore", "targetPct", "stopPct", "sellExpiry", "vrpMin", "adxMax"],
 };
 const SHARED_KEYS: (keyof StrategyConfig)[] = ["strategy", "slippagePoints"];
@@ -105,7 +105,7 @@ export function describe(cfg: StrategyConfig): string {
   }
   if (cfg.strategy === "ma_supertrend") {
     const ma = cfg.maType.toUpperCase();
-    return `${ma} ${cfg.maFast}/${cfg.maSlow} cross · SuperTrend ${cfg.stPeriod}, ${cfg.stMultiplier} · ${cfg.trendCloseEod ? (cfg.trendReenter ? "intraday, re-enter next day" : "intraday") : "overnight"}${cfg.trendReenterOnFlip ? " · re-enter on ST turn" : ""}${cfg.trendLastEntry ? ` · entries before ${cfg.trendLastEntry}` : ""}`;
+    return `${ma} ${cfg.maFast}/${cfg.maSlow} cross · SuperTrend ${cfg.stPeriod}, ${cfg.stMultiplier} · ${cfg.trendCloseEod ? (cfg.trendReenter ? "intraday, re-enter next day" : "intraday") : "overnight"}${cfg.trendReenterOnFlip ? " · re-enter on ST turn" : ""}${cfg.trendLastEntry ? ` · entries before ${cfg.trendLastEntry}` : ""}${cfg.trendEntryBreak ? (cfg.trendBreakRolling ? " · buy above previous high" : ` · buy on break (${cfg.trendEntryBreak} bar${cfg.trendEntryBreak > 1 ? "s" : ""})`) : ""}${cfg.trendExitPast !== null ? ` · exit ${cfg.trendExitPast} pts past ST` : ""}${cfg.trendGapExit ? ` · exit at open on ${cfg.trendGapExit} pt gap` : ""}`;
   }
   const entry = cfg.entryMode === "breakout" ? "breakout" : `pullback ${Math.round(cfg.fibEntryLevel * 100)}%`;
   const exit = { tp_ladder: "ladder", fib_tsl: "target + trail", eod: "no target" }[cfg.exitMode];

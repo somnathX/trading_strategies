@@ -29,9 +29,15 @@ export const minuteOf = (t: number) => Math.floor(((t + IST_OFFSET) % 86400) / 6
 export const dayStart = (day: number) => day * 86400 - IST_OFFSET; // epoch of IST midnight
 export const dayToISO = (day: number) => new Date(day * 86400000).toISOString().slice(0, 10);
 export const isoToDay = (iso: string) => Math.floor(Date.parse(`${iso}T00:00:00Z`) / 86400000);
-const isWeekday = (day: number) => {
+/**
+ * Weekend days the exchange really traded (Budget days, Muhurat, disaster-recovery drills). Charts such as TradingView
+ * include them, so indicators must too. Other weekend candles in the Dhan data are test sessions with junk prices.
+ * ponytail: hand-kept list; add each new special session as NSE announces it.
+ */
+const SPECIAL_SESSIONS = new Set(["2020-02-01", "2024-01-20", "2024-03-02", "2024-05-18", "2025-02-01", "2026-02-01", "2026-11-08"].map(isoToDay));
+const isTradingDay = (day: number) => {
   const dow = (day + 4) % 7; // 1970-01-01 was a Thursday; 0 = Sunday
-  return dow >= 1 && dow <= 5;
+  return (dow >= 1 && dow <= 5) || SPECIAL_SESSIONS.has(day);
 };
 
 export function hmToMinutes(hm: string): number {
@@ -50,12 +56,12 @@ export function buildMarket(c: Candles, session: Session = NSE): Market {
     const d = dayOf(c.t[i]);
     day[i] = d;
     minute[i] = minuteOf(c.t[i]);
-    if (minute[i] >= session.open && minute[i] < session.close && isWeekday(d)) {
+    if (minute[i] >= session.open && minute[i] < session.close && isTradingDay(d)) {
       let f = fullSessions.get(d);
       if (!f) fullSessions.set(d, (f = []));
       f.push(i);
     }
-    if (minute[i] >= session.open && minute[i] < session.orbClose && isWeekday(d)) {
+    if (minute[i] >= session.open && minute[i] < session.orbClose && isTradingDay(d)) {
       let s = sessions.get(d);
       if (!s) {
         sessions.set(d, (s = []));

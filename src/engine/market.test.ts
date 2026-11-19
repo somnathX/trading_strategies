@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dayStart, isoToDay, minuteOf, resample } from "./market";
+import { buildMarket, dayStart, isoToDay, minuteOf, resample } from "./market";
 import type { Candles } from "./types";
 
 describe("resample", () => {
@@ -58,5 +58,17 @@ describe("US session", () => {
     expect(full.length).toBe(77);
     expect(minuteOf(resample(c, 60, us.open).t[0])).toBe(9 * 60 + 30);
     expect(openingRange(m, m.sessions.get(isoToDay("2026-01-05")), 15)).toMatchObject({ high: 6, low: 2 }); // 09:30–09:40 bars
+  });
+});
+
+describe("special weekend sessions", () => {
+  it("keeps NSE's real weekend sessions (Budget day) and drops Dhan's junk weekend candles", () => {
+    const c: Candles = { t: [], o: [], h: [], l: [], c: [], v: [] };
+    for (const iso of ["2026-01-30", "2026-01-31", "2026-02-01", "2026-02-02"]) { // Fri, Sat (junk), Sun (Budget), Mon
+      c.t.push(dayStart(isoToDay(iso)) + (9 * 60 + 15) * 60);
+      for (const k of ["o", "h", "l", "c", "v"] as const) c[k].push(100);
+    }
+    const m = buildMarket(c);
+    expect([...m.fullSessions.keys()]).toEqual(["2026-01-30", "2026-02-01", "2026-02-02"].map(isoToDay));
   });
 });
