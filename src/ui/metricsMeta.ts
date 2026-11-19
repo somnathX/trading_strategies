@@ -37,26 +37,11 @@ export const METRICS: MetricMeta[] = [
 export const metric = (k: MetricKey) => METRICS.find((m) => m.key === k)!;
 
 export const EXIT_LABELS: Record<string, string> = {
-  stop: "Stop loss",
-  gap_stop: "Gapped through stop",
-  trail: "Trailing stop",
-  tsl: "Fib trailing stop",
-  eod: "Session close",
-  max_days: "Max hold reached",
-  tp1: "Target 1",
-  tp2: "Target 2",
-  tp3: "Target 3",
-  tp1_first: "Target 1 (closed all)",
-  tp2_first: "Target 2 reached first",
-  tp3_first: "Target 3 reached first",
-  opp_or: "Opposite range break",
-  opp_or_eod: "Opposite range break (close)",
   st_flip: "SuperTrend flip",
-  st_past: "Too far past SuperTrend",
-  gap: "Big gap at the open",
-  target: "Profit target",
-  time: "Planned exit (expiry or days before)",
-  open_end: "Still open at end of test",
+  st_past: "Past SuperTrend",
+  gap: "Gap at the open",
+  eod: "Day end",
+  open_end: "Still open",
 };
 
 /** Green/red tint; `strength` in [-1, 1] (negative = red). */

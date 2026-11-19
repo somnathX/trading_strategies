@@ -6,7 +6,7 @@ import type { StrategyConfig } from "../engine/types";
 import { finalExit } from "./analysis";
 import { type TrendOverlay } from "./charts";
 import { ProChart } from "./ProChart";
-import { date, fmtISO, group, inr, num, time, tone } from "./format";
+import { date, fmtISO, group, inr, inrShort, num, time, tone } from "./format";
 import { Segmented } from "./controls";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -61,14 +61,14 @@ const closedBy = (r: TradeRow) => {
     : EXIT_LABELS[last] ?? last;
   return { label, after: steps.map((x) => EXIT_LABELS[x] ?? x).join(", ") };
 };
-const REENTRY: Record<string, string> = { next_day: "next-day re-entry", st_back: "ST re-entry", late: "late entry (V2)" };
+const REENTRY: Record<string, string> = { next_day: "next-day re-entry", st_back: "re-entry", late: "late (V2)" };
 
-/** Option expiry as a chip: date, weekday and calendar days left when the trade was opened. */
+/** Option expiry and days left at entry, "29/12 · 40d" (0DTE highlighted); the full date is in the tooltip. */
 const Expiry = ({ r }: { r: TradeRow }) => {
   const left = isoToDay(r.option!.expiry) - isoToDay(r.sessionDate);
   return (
-    <span className="ml-2 inline-flex h-[18px] items-center gap-1.5 rounded border bg-muted/60 px-1.5 align-[1px] text-[11px] font-medium text-muted-foreground" title={`Expiry ${fmtISO(r.option!.expiry)}, ${left} day${left === 1 ? "" : "s"} after entry`}>
-      {fmtISO(r.option!.expiry, false)}<span className={cn("border-l pl-1.5", left === 0 && "font-semibold text-warn")}>{left === 0 ? "0DTE" : `${left}d`}</span>
+    <span title={`Expiry ${fmtISO(r.option!.expiry)}, ${left} day${left === 1 ? "" : "s"} after entry`}>
+      {fmtISO(r.option!.expiry, false).slice(0, 5)} · <span className={cn(left === 0 && "font-semibold text-warn")}>{left === 0 ? "0DTE" : `${left}d`}</span>
     </span>
   );
 };
@@ -101,6 +101,7 @@ const sizingWhy = (r: TradeRow): string => {
 };
 
 /** Read left to right: when → what → prices → result → why it closed. */
+const SORT_KEYS = ["in", "traded", "lots", "price", "net", "running", "exit"];
 const cols = (bar: number, _cfg: StrategyConfig, sizedOn?: number, compound = false): Col[] => [
   { key: "in", label: "Date", get: (r) => r.entryTime, render: (r) => {
     const t0 = filled(r, r.entryTime, bar), t1 = exited(r, bar);
@@ -110,33 +111,34 @@ const cols = (bar: number, _cfg: StrategyConfig, sizedOn?: number, compound = fa
   { key: "traded", label: "Trade", get: (r) => `${r.side} ${traded(r)}`, render: (r) => (
     <span className="flex items-center gap-2.5">
       <SideTag side={r.side} />
-      <Two top={<>{traded(r)}{r.option && <Expiry r={r} />}</>} sub={[
+      <Two top={traded(r)} sub={<>{r.option && <Expiry r={r} />}{[
         r.option?.rolls ? `rolled ${r.option.rolls}×` : "", r.reentry ? REENTRY[r.reentry] : "",
-      ].filter(Boolean).join(" · ") || undefined} />
+      ].filter(Boolean).map((x) => ` · ${x}`).join("").replace(/^ · /, r.option ? " · " : "")}</>} />
     </span>) },
+  { key: "lots", label: "Size", num: true, get: (r) => r.lots,
+    render: (r) => <span title={`${group(r.qty)} qty. ${sizingWhy(r)}`}><Two top={`${group(r.lots)} lot${r.lots === 1 ? "" : "s"}${r.marginCapped ? "*" : ""}`}
+      sub={inrShort(r.qty * (r.option?.entry ?? r.entryPrice))} /></span> },
+  { key: "price", label: "Entry → exit", num: true, get: (r) => r.option?.entry ?? r.entryPrice,
+    render: (r) => <Two top={`${num(r.option?.entry ?? r.entryPrice)} → ${num(r.option?.exit ?? r.exitPrice)}`}
+      sub={r.option && `index ${num(r.entryPrice, 0)} → ${num(r.exitPrice, 0)}`} /> },
+  { key: "net", label: "Net", get: (r) => r.netInr, num: true,
+    render: (r) => {
+      const pts = r.option?.pnl ?? r.pnlPoints;
+      return <span title={costBreakdown(r)}><Two top={<span className={cn("font-semibold", tone(r.netInr))}>{inr(r.netInr)}</span>}
+        sub={<span className={tone(pts)}>{pts > 0 ? "+" : ""}{num(pts, 1)} pts</span>} /></span>;
+    } },
   // Growing with profits, the balance is what the next trade is sized on, so it leads. Otherwise every trade is sized on the
   // same capital and only the profit so far moves.
   compound ? { key: "running", label: "Balance", num: true, get: (r) => r.capitalAfter ?? 0,
     render: (r) => r.capitalAfter === undefined ? "—" : (
       <span title="Money in the account after this trade closed (the next trade is sized on it), then the net P&L so far this calendar year and this month">
-        <Two top={inr(r.capitalAfter)} sub={<>Year <span className={tone(r.pnlYear ?? 0)}>{inr(r.pnlYear ?? 0)}</span> · Month <span className={tone(r.pnlMonth ?? 0)}>{inr(r.pnlMonth ?? 0)}</span></>} />
+        <Two top={inr(r.capitalAfter)} sub={<>Year <span className={tone(r.pnlYear ?? 0)}>{inrShort(r.pnlYear ?? 0)}</span> · Month <span className={tone(r.pnlMonth ?? 0)}>{inrShort(r.pnlMonth ?? 0)}</span></>} />
       </span>) }
   : { key: "running", label: "P&L so far", num: true, get: (r) => r.pnlYear ?? 0,
     render: (r) => r.pnlYear === undefined ? "—" : (
       <span title={`Net P&L of the trades closed so far this calendar year, and this month, this trade included.${sizedOn ? ` Every trade is sized on ${inr(sizedOn)}: grow with profits is off.` : ""}`}>
         <Two top={<>Year <span className={tone(r.pnlYear)}>{inr(r.pnlYear)}</span></>} sub={<>Month <span className={tone(r.pnlMonth ?? 0)}>{inr(r.pnlMonth ?? 0)}</span></>} />
       </span>) },
-  { key: "lots", label: "Lots", num: true, get: (r) => r.lots,
-    render: (r) => <span title={sizingWhy(r)}><Two top={`${group(r.lots)}${r.marginCapped ? "*" : ""}`} sub={`${group(r.qty)} qty`} /></span> },
-  { key: "value", label: "Value", num: true, get: (r) => r.qty * (r.option?.entry ?? r.entryPrice),
-    render: (r) => <span title="Quantity × entry price">{inr(r.qty * (r.option?.entry ?? r.entryPrice))}</span> },
-  { key: "entry", label: "Entry", num: true, get: (r) => r.option?.entry ?? r.entryPrice,
-    render: (r) => <Two top={num(r.option?.entry ?? r.entryPrice)} sub={r.option && `idx ${num(r.entryPrice)}`} /> },
-  { key: "exitpx", label: "Exit", num: true, get: (r) => r.option?.exit ?? r.exitPrice,
-    render: (r) => <Two top={num(r.option?.exit ?? r.exitPrice)} sub={r.option && `idx ${num(r.exitPrice)}`} /> },
-  { key: "pts", label: "Points", get: (r) => r.option?.pnl ?? r.pnlPoints, render: (r) => num(r.option?.pnl ?? r.pnlPoints, 1), num: true },
-  { key: "net", label: "Net", get: (r) => r.netInr, num: true,
-    render: (r) => <span title={costBreakdown(r)}><Two top={inr(r.netInr)} sub={`${inr(r.chargesInr)} charges · ${inr(r.slippageInr)} slip`} /></span> },
   { key: "exit", label: "Closed by", get: (r) => closedBy(r).label, render: (r) => {
     const c = closedBy(r);
     return <Two top={c.label} sub={c.after && `after ${c.after}`} />;
@@ -184,7 +186,7 @@ export function Trades({ rows, market, focusDay, cfg, sizedOn, compound = false 
   }, [market, cfg]);
   // Sort and filters survive reloads and tab switches.
   const saved = useMemo(() => load<{ sort?: { key: string; dir: 1 | -1 }; side?: "all" | "long" | "short"; result?: "all" | "win" | "loss"; exit?: string; entry?: string }>("orb:trades-view", {}), []);
-  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>(saved.sort ?? { key: "in", dir: -1 }); // newest first
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>(saved.sort && SORT_KEYS.includes(saved.sort.key) ? saved.sort : { key: "in", dir: -1 }); // newest first
   const [side, setSide] = useState(saved.side ?? "all");
   const [result, setResult] = useState(saved.result ?? "all");
   const [exit, setExit] = useState(saved.exit ?? "all");
@@ -308,7 +310,7 @@ export function Trades({ rows, market, focusDay, cfg, sizedOn, compound = false 
                 className="cursor-pointer focus-visible:bg-muted/60 focus-visible:outline-none" onClick={() => setSelected(r.entryTime)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(r.entryTime); } }}>
                 {COLS.map((c) => (
-                  <TableCell key={c.key} className={cn(c.num && "text-right num", c.key === "in" && "pl-5", c.key === "net" && "[&_span:first-child]:font-semibold", (c.key === "net" || c.key === "pts") && tone(c.get(r) as number))}>
+                  <TableCell key={c.key} className={cn(c.num && "text-right num", c.key === "in" && "pl-5", )}>
                     {c.render ? c.render(r) : String(c.get(r))}
                   </TableCell>
                 ))}
@@ -334,15 +336,15 @@ function MonthRow({ cols, g, compound }: { cols: Col[]; g: { month: string; n: n
     in: <span className="font-semibold">{label}</span>,
     traded: `${g.n} trade${g.n === 1 ? "" : "s"} closed`,
     running: g.last.pnlYear === undefined ? "" : compound && cout !== undefined
-      ? <Two top={inr(cout)} sub={<>Year <span className={tone(g.last.pnlYear)}>{inr(g.last.pnlYear)}</span></>} />
+      ? <Two top={inr(cout)} sub={<>Year <span className={tone(g.last.pnlYear)}>{inrShort(g.last.pnlYear)}</span></>} />
       : <>Year <span className={tone(g.last.pnlYear)}>{inr(g.last.pnlYear)}</span></>,
-    pts: <span className={tone(g.pts)} title="Points captured by the month's trades (option premium points for option trades)">{num(g.pts, 1)}</span>,
-    net: <Two top={inr(g.net)} sub={cin ? `${g.net >= 0 ? "+" : ""}${num((g.net / cin) * 100, 1)}%` : undefined} />,
+    net: <Two top={<span className={cn("font-semibold", tone(g.net))}>{inr(g.net)}</span>}
+      sub={<><span className={tone(g.pts)} title="Points captured by the month's trades (option premium points for option trades)">{g.pts > 0 ? "+" : ""}{num(g.pts, 1)} pts</span>{cin ? ` · ${g.net >= 0 ? "+" : ""}${num((g.net / cin) * 100, 1)}%` : ""}</>} />,
   };
   return (
     <TableRow className="bg-muted/60 font-medium hover:bg-muted/60" title="Trades closed this month and their net, the same as the Overview's monthly table, then the year-to-date P&L (and, growing with profits, the balance) at the month's end.">
       {cols.map((c) => (
-        <TableCell key={c.key} className={cn(c.num && "text-right num", c.key === "in" && "pl-5", c.key === "net" && cn("[&_span:first-child]:font-semibold", tone(g.net)))}>{cell[c.key] ?? ""}</TableCell>
+        <TableCell key={c.key} className={cn(c.num && "text-right num", c.key === "in" && "pl-5", )}>{cell[c.key] ?? ""}</TableCell>
       ))}
     </TableRow>
   );
